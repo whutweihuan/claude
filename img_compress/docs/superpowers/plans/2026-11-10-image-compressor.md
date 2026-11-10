@@ -960,3 +960,10 @@ python compress.py sample.jpg -l standard -o out -f keep
 - [ ] **步骤 8：完成检查点**
 
 对照规格第 10 节逐条确认验收标准；记录每条对应的测试或手动证据。不提交 Git。
+
+## 执行后修订（2026-11-10）
+
+- 透明度判定集中为 `_has_transparency`，覆盖 RGBA 以及 P/RGB 模式的 tRNS；GIF 输出显式选择透明调色板索引。
+- `compress_files` 将缺失的显式输入路径记入 `failures` 后继续处理其余图片；`expand_inputs` 本身仍对缺失路径抛 `ToolError`。
+- CLI 成功行和 GUI 状态列展示 `CompressResult.note`，包括“已保留原图”和“转换后体积增大”。
+- 新增 tRNS PNG、透明 GIF、动画 WebP、EXIF、ICC、CLI 退出码和 GUI 端到端测试；最终全量 43 个测试通过。
