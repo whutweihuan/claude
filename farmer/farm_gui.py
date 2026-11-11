@@ -208,6 +208,8 @@ class FarmApp(tk.Tk):
 
         self._build_ui()
         self.refresh()
+        if self.load_warning:
+            self.set_status(self.load_warning)
 
         if self.start_loops:
             self.after(1000, self._tick)
@@ -491,7 +493,10 @@ class FarmApp(tk.Tk):
         self.refresh()
 
     def _save(self):
-        save_state(self.state, self.save_path)
+        try:
+            save_state(self.state, self.save_path)
+        except OSError as exc:
+            self.set_status("保存失败：{}".format(exc))
 
     def _on_close(self):
         self._save()
@@ -511,6 +516,19 @@ class FarmApp(tk.Tk):
         self.after(10000, self._autosave)
 
 
-if __name__ == "__main__":
+def _enable_dpi_awareness():
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
+
+def main():
+    _enable_dpi_awareness()
     app = FarmApp()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

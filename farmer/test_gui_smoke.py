@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 import tempfile
+import tkinter as tk
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import farm_gui
 from farm_core import CROPS
@@ -158,3 +160,48 @@ class GuiEconomyTests(unittest.TestCase):
         self.app._on_plot_click(0)
         self.app.refresh()
         self.assertEqual(self.app.title(), "小菜园")
+
+
+class GuiPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.save_path = Path(self.tmp.name) / "save.json"
+        self.now = 1_700_000_000.0
+        self.app = farm_gui.FarmApp(
+            save_path=self.save_path,
+            start_loops=False,
+            clock=lambda: self.now,
+        )
+        self.app.update_idletasks()
+
+    def tearDown(self):
+        try:
+            self.app.destroy()
+        except tk.TclError:
+            pass
+        self.tmp.cleanup()
+
+    def test_close_saves_state(self):
+        self.app._on_plot_click(0)
+        self.app._on_close()
+        self.assertTrue(self.save_path.exists())
+        data = self.save_path.read_text(encoding="utf-8")
+        self.assertIn("xiaobaicai", data)
+
+    def test_save_failure_does_not_crash(self):
+        with mock.patch.object(farm_gui, "save_state", side_effect=OSError("磁盘忙")):
+            self.app._save()
+        self.assertIn("保存失败", self.app.status_var.get())
+
+    def test_app_starts_from_existing_save(self):
+        self.app.state.coins = 777
+        self.app._save()
+        app2 = farm_gui.FarmApp(
+            save_path=self.save_path,
+            start_loops=False,
+            clock=lambda: self.now,
+        )
+        try:
+            self.assertEqual(app2.state.coins, 777)
+        finally:
+            app2.destroy()
