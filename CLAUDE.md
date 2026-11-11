@@ -42,3 +42,7 @@ Skills 位于 `.claude/skills/` 目录，每个 skill 有独立的 `SKILL.md` �
 
 如果你认为哪怕只有 1% 的可能性某个 skill 适用于你正在做的事情，你必须调用该 skill 检查。
 <!-- superpowers-zh:end -->
+
+## 项目经验
+
+见 `.claude/CLAUDE.md`：Tkinter/Windows DPI 布局、存档安全、Git 卫生。
