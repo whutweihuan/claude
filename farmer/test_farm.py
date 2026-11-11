@@ -156,3 +156,30 @@ class HarvestTests(unittest.TestCase):
         self.assertEqual(self.state.warehouse, {"xiaobaicai": 2})
         self.assertIsNotNone(self.state.plots[2])
         self.assertEqual(self.state.harvest_all(self.t0 + 1800), 0)
+
+
+class SellingTests(unittest.TestCase):
+    def setUp(self):
+        self.state = FarmState()
+        self.state.warehouse = {"xiaobaicai": 3, "fanqie": 1}
+
+    def test_sell_returns_value_and_clears_that_crop(self):
+        amount = self.state.sell("xiaobaicai")
+        self.assertEqual(amount, 75)
+        self.assertEqual(self.state.coins, 60 + 75)
+        self.assertEqual(self.state.total_income, 75)
+        self.assertEqual(self.state.warehouse, {"fanqie": 1})
+
+    def test_sell_empty_or_unknown_returns_zero(self):
+        self.assertEqual(self.state.sell("yumi"), 0)
+        self.assertEqual(self.state.sell("unknown"), 0)
+        self.assertEqual(self.state.coins, 60)
+
+    def test_sell_all_sums_known_crops_and_clears(self):
+        self.assertEqual(self.state.warehouse_value(), 75 + 135)
+        amount = self.state.sell_all()
+        self.assertEqual(amount, 210)
+        self.assertEqual(self.state.coins, 270)
+        self.assertEqual(self.state.total_income, 210)
+        self.assertEqual(self.state.warehouse, {})
+        self.assertEqual(self.state.sell_all(), 0)

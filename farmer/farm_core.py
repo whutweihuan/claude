@@ -146,3 +146,27 @@ class FarmState:
                 self.harvest(index, now)
                 harvested += 1
         return harvested
+
+    def sell(self, crop_id: str) -> int:
+        count = self.warehouse.get(crop_id, 0)
+        crop = CROPS.get(crop_id)
+        if count <= 0 or crop is None:
+            return 0
+        amount = count * crop.sell_price
+        self.coins += amount
+        self.total_income += amount
+        self.warehouse.pop(crop_id, None)
+        return amount
+
+    def sell_all(self) -> int:
+        total = 0
+        for crop_id in list(self.warehouse.keys()):
+            total += self.sell(crop_id)
+        return total
+
+    def warehouse_value(self) -> int:
+        return sum(
+            count * CROPS[crop_id].sell_price
+            for crop_id, count in self.warehouse.items()
+            if crop_id in CROPS and count > 0
+        )
