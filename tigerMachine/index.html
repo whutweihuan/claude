@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>开火车啦 · 老虎水果机</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="cabinet">
+    <header class="marquee">
+      <div class="marquee-bulbs" aria-hidden="true"></div>
+      <div class="marquee-title">
+        <h1>老虎水果机</h1>
+        <p>开火车啦 · 大三元 · 小三元 · 天门</p>
+      </div>
+      <div class="marquee-bulbs" aria-hidden="true"></div>
+    </header>
+
+    <main class="stage">
+      <section class="board-wrap">
+        <canvas id="board" width="680" height="680"></canvas>
+        <div id="feature-banner" class="feature-banner hidden"></div>
+        <div id="guess-panel" class="overlay hidden">
+          <div class="guess-card">
+            <h2>猜大小</h2>
+            <div class="guess-amount">本局奖金 <strong id="guess-win">0</strong></div>
+            <div class="guess-actions">
+              <button id="guess-small" class="btn guess-btn">小 1–6</button>
+              <button id="guess-big" class="btn guess-btn">大 8–13</button>
+            </div>
+            <button id="guess-collect" class="btn btn-collect">收分落袋</button>
+            <p class="guess-note">开 7 通杀 · 最多猜 3 次</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="led-row">
+          <div class="led"><span class="led-label">金币</span><span id="led-coins" class="led-value">1000</span></div>
+          <div class="led"><span class="led-label">总押分</span><span id="led-bet" class="led-value">0</span></div>
+          <div class="led"><span class="led-label">本局奖金</span><span id="led-win" class="led-value">0</span></div>
+          <div class="led"><span class="led-label">彩头</span><span id="led-feature" class="led-value">0/60</span></div>
+        </div>
+
+        <div class="chips" role="group" aria-label="筹码">
+          <span class="chips-label">筹码</span>
+          <button class="chip is-active" data-chip="1">1</button>
+          <button class="chip" data-chip="5">5</button>
+          <button class="chip" data-chip="10">10</button>
+          <button class="chip" data-chip="50">50</button>
+        </div>
+
+        <div id="bet-list" class="bet-list">
+          <div class="bet-empty">押分表将在下一步接入</div>
+        </div>
+
+        <div class="actions">
+          <button id="btn-coin" class="btn">投币 +100</button>
+          <button id="btn-clear" class="btn">全清</button>
+          <button id="btn-all" class="btn">全押</button>
+          <button id="btn-auto" class="btn">自动</button>
+          <button id="btn-rules" class="btn">规则</button>
+          <button id="btn-mute" class="btn">音效</button>
+          <button id="btn-start" class="btn btn-start">开 始</button>
+        </div>
+
+        <div class="hint">空格 开始 · C 投币 · X 全清 · M 静音</div>
+      </aside>
+    </main>
+
+    <footer class="status-bar">
+      <span id="status">投币后押分，按开始跑灯</span>
+      <span class="disclaimer">纯娱乐 · 虚拟币</span>
+    </footer>
+
+    <div id="rules-modal" class="modal hidden">
+      <div class="modal-head">
+        <h2>玩法与赔率</h2>
+        <button id="btn-close-rules" class="btn btn-close">关闭</button>
+      </div>
+      <div class="rules-body">
+        <p>投币后给 9 个图案押分，按开始跑灯。跑灯停在押过的图案，按“押分 × 赔率”赔付；跑空不赔。中奖后可猜大小，猜对翻倍、猜错清零，最多 3 次。</p>
+        <table class="paytable">
+          <thead><tr><th>图案</th><th>赔率</th></tr></thead>
+          <tbody>
+            <tr><td>小香蕉</td><td>4×</td></tr>
+            <tr><td>小芒果</td><td>6×</td></tr>
+            <tr><td>苹果</td><td>8×</td></tr>
+            <tr><td>香蕉</td><td>12×</td></tr>
+            <tr><td>芒果</td><td>15×</td></tr>
+            <tr><td>西瓜</td><td>20×</td></tr>
+            <tr><td>双星</td><td>30×</td></tr>
+            <tr><td>双七</td><td>40×</td></tr>
+            <tr><td>BAR</td><td>50×</td></tr>
+          </tbody>
+        </table>
+        <h3>彩头</h3>
+        <ul>
+          <li><strong>小三元</strong>：小香蕉、小芒果、苹果三灯同时亮，押中的各赔一次。</li>
+          <li><strong>大三元</strong>：西瓜、双星、双七三灯同时亮，押中的各赔一次。</li>
+          <li><strong>开火车</strong>：5 节车厢依次停灯，停在押过的图案就赔；空车不赔。</li>
+          <li><strong>天门</strong>：小天门 5× / 天门 10× / 大天门 50× 总押分。</li>
+        </ul>
+        <p class="rules-foot">连续 60 局没有彩头，下一局必出彩头。金币达到 99999 会爆机庆祝。纯娱乐、虚拟币，不联网。</p>
+      </div>
+    </div>
+
+    <div id="fatal" class="fatal hidden"></div>
+  </div>
+
+  <script src="engine.js"></script>
+  <script src="render.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
