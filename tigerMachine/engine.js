@@ -334,6 +334,8 @@
       if (forced) {
         outcome = forced;
         forced = null;
+      } else if (spinsSinceFeature >= PITY_SPINS) {
+        outcome = { kind: 'feature', featureId: pickFeatureId() };
       } else {
         const roll = rng();
         if (roll < FEATURE_PROB) {
@@ -396,13 +398,58 @@
       return result;
     }
 
+    function maybeJackpot() {
+      if (coins < 90000) jackpotArmed = true;
+      if (jackpotArmed && coins >= JACKPOT) {
+        jackpotArmed = false;
+        return true;
+      }
+      return false;
+    }
+
     function collect() {
       if (pendingWin <= 0) return { collected: 0, jackpot: false };
       const amount = pendingWin;
       coins += amount;
       pendingWin = 0;
       guessCount = 0;
-      return { collected: amount, jackpot: false };
+      return { collected: amount, jackpot: maybeJackpot() };
+    }
+
+    function guess(choice) {
+      if (pendingWin <= 0) throw new Error('NO_PENDING_WIN');
+      if (choice !== 'small' && choice !== 'big') throw new Error('INVALID_CHOICE');
+      if (guessCount >= MAX_GUESSES) throw new Error('GUESS_LIMIT');
+
+      const number = 1 + Math.floor(rng() * 13);
+      const correct = (choice === 'small' && number >= 1 && number <= 6)
+        || (choice === 'big' && number >= 8 && number <= 13);
+      guessCount += 1;
+
+      if (correct) {
+        pendingWin *= 2;
+      } else {
+        pendingWin = 0;
+      }
+
+      let collected = 0;
+      let autoCollected = false;
+      if (guessCount >= MAX_GUESSES && pendingWin > 0) {
+        collected = pendingWin;
+        coins += pendingWin;
+        pendingWin = 0;
+        autoCollected = true;
+      }
+
+      return {
+        number,
+        correct,
+        pendingWin,
+        collected,
+        autoCollected,
+        guessCount,
+        jackpot: maybeJackpot(),
+      };
     }
 
     return {
@@ -413,6 +460,7 @@
       getState,
       spin,
       collect,
+      guess,
       forceNextSymbol,
       forceNextLuck,
       forceNextFeature,

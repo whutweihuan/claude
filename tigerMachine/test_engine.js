@@ -186,4 +186,87 @@ test('彩头重置保底计数', () => {
   assert.strictEqual(g.getState().spinsSinceFeature, 0);
 });
 
+test('猜对翻倍，收分入账', () => {
+  // 第 1 个 rng 给 spin 的停灯格，第 2 个给猜大小
+  const g = E.createGame({ rng: seq([0, 4 / 13]) }); // 开 5
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  g.spin();                                     // pending 120
+  const r = g.guess('small');
+  assert.strictEqual(r.number, 5);
+  assert.strictEqual(r.correct, true);
+  assert.strictEqual(g.getState().pendingWin, 240);
+  assert.strictEqual(g.collect().collected, 240);
+});
+
+test('猜错清零，开 7 通杀', () => {
+  const g = E.createGame({ rng: seq([0, 6 / 13]) }); // 开 7
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  g.spin();
+  const r = g.guess('big');
+  assert.strictEqual(r.number, 7);
+  assert.strictEqual(r.correct, false);
+  assert.strictEqual(g.getState().pendingWin, 0);
+});
+
+test('第三次猜对后自动收分', () => {
+  // 1 个给 spin，3 个给三次猜大小
+  const g = E.createGame({ rng: seq([0, 0, 0, 0]) }); // 三次都开 1
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  g.spin();
+  g.guess('small');
+  g.guess('small');
+  const r = g.guess('small');
+  assert.strictEqual(r.autoCollected, true);
+  assert.strictEqual(g.getState().pendingWin, 0);
+  assert.strictEqual(g.getState().coins, 1000 - 10 + 120 * 8);
+});
+
+test('没有 pendingWin 时不能猜', () => {
+  const g = E.createGame();
+  assert.throws(() => g.guess('small'), /NO_PENDING_WIN/);
+});
+
+test('60 局无彩头后下一局强制彩头', () => {
+  const g = E.createGame({ coins: 1000, rng: () => 0.999 }); // 一直跑空
+  g.bet('s_banana', 1);
+  for (let i = 0; i < 60; i++) { g.forceNextLuck(); g.spin(); }
+  const r = g.spin(); // 第 61 局
+  assert.strictEqual(r.kind, 'feature');
+  assert.strictEqual(g.getState().spinsSinceFeature, 0);
+});
+
+test('达到 99999 触发爆机标记', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.insertCoin(99999 - 1000);
+  g.bet('bar', 1);
+  g.forceNextSymbol('bar');
+  g.spin();
+  const c = g.collect();
+  assert.strictEqual(c.jackpot, true);
+  assert.strictEqual(g.getState().jackpotArmed, false);
+});
+
+test('10 万局九门均注：RTP 在 0.85–1.05', () => {
+  const g = E.createGame({ coins: 1e9, rng: E.mulberry32(20261111) });
+  for (const s of E.SYMBOLS) g.bet(s.id, 1);
+  let wagered = 0, won = 0, features = 0, trainCount = 0, trainSpins = 0;
+  for (let i = 0; i < 100000; i++) {
+    const r = g.spin();
+    wagered += 9;
+    won += r.win;
+    if (r.kind === 'feature') {
+      features++;
+      if (r.feature.type === 'train') { trainSpins++; trainCount += r.feature.carriages.length; }
+    }
+    g.collect();
+  }
+  const rtp = won / wagered;
+  assert.ok(rtp >= 0.85 && rtp <= 1.05, `RTP=${rtp}`);
+  assert.ok(features / 100000 >= 0.015 && features / 100000 <= 0.055, `feature rate=${features / 100000}`);
+  assert.strictEqual(trainCount, trainSpins * 5);
+});
+
 summary();
