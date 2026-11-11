@@ -139,4 +139,51 @@ test('有未收奖金时禁止再开局/改注', () => {
   assert.deepStrictEqual(g.bet('apple', 1), { ok: false, error: 'ROUND_ACTIVE' });
 });
 
+test('小三元只赔三小，不赔其他', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('s_banana', 1); g.bet('s_mango', 2); g.bet('apple', 3); g.bet('bar', 1);
+  g.forceNextFeature('smallThree');
+  const r = g.spin();
+  assert.strictEqual(r.kind, 'feature');
+  assert.strictEqual(r.feature.type, 'smallThree');
+  assert.strictEqual(r.win, 1 * 4 + 2 * 6 + 3 * 8);
+  assert.deepStrictEqual(r.feature.symbols.map(s => s.id), ['s_banana', 's_mango', 'apple']);
+});
+
+test('大三元只赔三大', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('watermelon', 1); g.bet('star', 2); g.bet('seven', 3); g.bet('apple', 9);
+  g.forceNextFeature('bigThree');
+  const r = g.spin();
+  assert.strictEqual(r.win, 1 * 20 + 2 * 30 + 3 * 40);
+});
+
+test('开火车 5 节，空车不赔', () => {
+  // 0.65 -> bar，0.9 -> 空车，0.65 -> bar，0.9 -> 空车，0.65 -> bar，最后 0 给 stopIndex
+  const g = E.createGame({ rng: seq([0.65, 0.9, 0.65, 0.9, 0.65, 0]) });
+  g.bet('bar', 10);
+  g.forceNextFeature('train');
+  const r = g.spin();
+  assert.strictEqual(r.feature.carriages.length, 5);
+  assert.deepStrictEqual(r.feature.carriages.map(c => c.symbolId), ['bar', null, 'bar', null, 'bar']);
+  assert.strictEqual(r.win, 3 * 10 * 50);
+});
+
+test('天门按总押分 × 转盘倍率', () => {
+  const g = E.createGame({ rng: seq([0.99, 0]) }); // 大天门
+  g.bet('bar', 5); g.bet('apple', 5);                 // 总押分 10
+  g.forceNextFeature('gate');
+  const r = g.spin();
+  assert.strictEqual(r.feature.wheel.label, '大天门');
+  assert.strictEqual(r.win, 10 * 50);
+});
+
+test('彩头重置保底计数', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('s_banana', 1);
+  g.forceNextFeature('smallThree');
+  g.spin();
+  assert.strictEqual(g.getState().spinsSinceFeature, 0);
+});
+
 summary();

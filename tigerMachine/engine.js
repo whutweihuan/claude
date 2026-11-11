@@ -60,6 +60,27 @@
     }
   });
 
+  // 开火车车厢：每个图案的总权重 = 1/赔率，再平摊到它的每个灯位；
+  // 空车权重 0.43，使空车概率为 0.43 / (0.82 + 0.43) = 34.4%。
+  const TRAIN_TABLE = [];
+  RING.forEach((id, index) => {
+    if (id === 'luck') return;
+    const sym = SYMBOLS.find((s) => s.id === id);
+    const count = RING_INDICES_BY_SYMBOL[id].length;
+    TRAIN_TABLE.push({
+      symbolId: id,
+      stopIndex: index,
+      weight: (1 / sym.odds) / count,
+    });
+  });
+  TRAIN_TABLE.push({
+    symbolId: null,
+    stopIndex: LUCK_INDICES[0],
+    weight: 0.43,
+    empty: true,
+  });
+  const TRAIN_TOTAL_WEIGHT = TRAIN_TABLE.reduce((sum, entry) => sum + entry.weight, 0);
+
   function mulberry32(seed) {
     let a = seed >>> 0;
     return function () {
@@ -193,10 +214,99 @@
       return FEATURES[FEATURES.length - 1].id;
     }
 
-    // 任务 3 会替换成完整的彩头赔付。
+    function pickRingIndexForSymbol(symbolId) {
+      return pickFrom(RING_INDICES_BY_SYMBOL[symbolId]);
+    }
+
+    function pickGateWheel() {
+      const total = GATE_WHEEL.reduce((sum, w) => sum + w.weight, 0);
+      const roll = rng() * total;
+      let acc = 0;
+      for (const wheel of GATE_WHEEL) {
+        acc += wheel.weight;
+        if (roll < acc) return wheel;
+      }
+      return GATE_WHEEL[GATE_WHEEL.length - 1];
+    }
+
+    function drawCarriage() {
+      const roll = rng() * TRAIN_TOTAL_WEIGHT;
+      let acc = 0;
+      for (const entry of TRAIN_TABLE) {
+        acc += entry.weight;
+        if (roll >= acc) continue;
+        if (entry.empty) {
+          return {
+            symbolId: null,
+            stopIndex: entry.stopIndex,
+            win: 0,
+            empty: true,
+          };
+        }
+        const sym = SYMBOLS.find((s) => s.id === entry.symbolId);
+        return {
+          symbolId: entry.symbolId,
+          stopIndex: entry.stopIndex,
+          win: bets[entry.symbolId] * sym.odds,
+          empty: false,
+        };
+      }
+      const last = TRAIN_TABLE[TRAIN_TABLE.length - 1];
+      return { symbolId: null, stopIndex: last.stopIndex, win: 0, empty: true };
+    }
+
     function buildFeature(featureId) {
       const feature = FEATURES.find((f) => f.id === featureId);
-      return { type: featureId, name: feature.name, win: 0 };
+
+      if (featureId === 'smallThree' || featureId === 'bigThree') {
+        const symbols = feature.symbols.map((id) => {
+          const sym = SYMBOLS.find((s) => s.id === id);
+          const bet = bets[id];
+          return {
+            id,
+            name: sym.name,
+            odds: sym.odds,
+            bet,
+            win: bet * sym.odds,
+            indices: RING_INDICES_BY_SYMBOL[id].slice(),
+          };
+        });
+        const win = symbols.reduce((sum, item) => sum + item.win, 0);
+        return {
+          type: featureId,
+          name: feature.name,
+          symbols,
+          win,
+          stopIndex: randomLuckIndex(),
+        };
+      }
+
+      if (featureId === 'train') {
+        const carriages = [];
+        for (let i = 0; i < 5; i++) carriages.push(drawCarriage());
+        const win = carriages.reduce((sum, carriage) => sum + carriage.win, 0);
+        return {
+          type: 'train',
+          name: feature.name,
+          carriages,
+          win,
+          stopIndex: randomLuckIndex(),
+        };
+      }
+
+      if (featureId === 'gate') {
+        const wheel = pickGateWheel();
+        const win = totalBet() * wheel.multiplier;
+        return {
+          type: 'gate',
+          name: feature.name,
+          wheel: { label: wheel.label, multiplier: wheel.multiplier, win },
+          win,
+          stopIndex: randomLuckIndex(),
+        };
+      }
+
+      throw new Error('INVALID_FEATURE');
     }
 
     function forceNextSymbol(symbolId) {
@@ -270,7 +380,7 @@
         guessCount = 0;
         result = {
           kind: 'feature',
-          stopIndex: randomLuckIndex(),
+          stopIndex: feature.stopIndex,
           symbolId: null,
           feature,
           win: feature.win,
