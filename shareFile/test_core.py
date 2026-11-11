@@ -67,3 +67,69 @@ class ResolveSharedPathTests(unittest.TestCase):
             os.symlink(outside, str(self.root / "link"))
             with self.assertRaises(core.UnsafePath):
                 core.resolve_shared_path(self.root, "link/secret.txt")
+
+
+class RangeTests(unittest.TestCase):
+    def test_no_header_returns_none(self):
+        self.assertIsNone(core.parse_range(None, 100))
+
+    def test_closed_range(self):
+        self.assertEqual(core.parse_range("bytes=10-19", 100), (10, 19))
+
+    def test_open_ended_and_suffix(self):
+        self.assertEqual(core.parse_range("bytes=90-", 100), (90, 99))
+        self.assertEqual(core.parse_range("bytes=-10", 100), (90, 99))
+
+    def test_clamps_end_to_size(self):
+        self.assertEqual(core.parse_range("bytes=90-200", 100), (90, 99))
+
+    def test_unsatisfiable_or_invalid(self):
+        for header in ("bytes=100-", "bytes=200-300", "bytes=5-2", "bytes=0-1,3-4", "items=0-1"):
+            with self.subTest(header=header):
+                with self.assertRaises(core.RangeNotSatisfiable) as ctx:
+                    core.parse_range(header, 100)
+                self.assertEqual(ctx.exception.size, 100)
+
+    def test_zero_size_file_has_no_valid_range(self):
+        with self.assertRaises(core.RangeNotSatisfiable):
+            core.parse_range("bytes=0-", 0)
+
+
+class ListFilesTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "sub").mkdir()
+        (self.root / "a.txt").write_text("abc", encoding="utf-8")
+        (self.root / "sub" / "b.mp4").write_bytes(b"x" * 10)
+        (self.root / ".hidden").write_text("no", encoding="utf-8")
+        (self.root / "~$temp.docx").write_text("no", encoding="utf-8")
+        (self.root / ".sharefile-tmp").mkdir()
+        (self.root / ".sharefile-tmp" / "upload-1.part").write_bytes(b"x")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_returns_relative_posix_paths_and_metadata(self):
+        files = core.iter_files(self.root)
+        self.assertEqual([f["path"] for f in files], ["a.txt", "sub/b.mp4"])
+        self.assertEqual(files[0]["size"], 3)
+        self.assertEqual(files[0]["name"], "a.txt")
+        self.assertIsInstance(files[0]["mtime"], int)
+
+    def test_sorted_case_insensitively(self):
+        (self.root / "B.txt").write_text("b", encoding="utf-8")
+        paths = [f["path"] for f in core.iter_files(self.root)]
+        self.assertEqual(paths, ["a.txt", "B.txt", "sub/b.mp4"])
+
+
+class NameAndSizeTests(unittest.TestCase):
+    def test_numbered_name(self):
+        self.assertEqual(core.numbered_name("a.txt", 0), "a.txt")
+        self.assertEqual(core.numbered_name("a.txt", 1), "a (1).txt")
+        self.assertEqual(core.numbered_name("archive.tar.gz", 2), "archive.tar (2).gz")
+
+    def test_format_size(self):
+        self.assertEqual(core.format_size(0), "0 B")
+        self.assertEqual(core.format_size(1536), "1.5 KB")
+        self.assertEqual(core.format_size(5 * 1024 * 1024), "5.0 MB")

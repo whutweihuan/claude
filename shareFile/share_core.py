@@ -24,6 +24,15 @@ class UnsafePath(ShareError):
     """请求路径越出共享目录。"""
 
 
+class RangeNotSatisfiable(ShareError):
+    """Range 头非法或超出文件范围。"""
+
+    def __init__(self, size):
+        # type: (int) -> None
+        super(RangeNotSatisfiable, self).__init__("range not satisfiable")
+        self.size = size
+
+
 def sanitize_filename(name):
     # type: (str) -> str
     """把上传方给的名字压成一个安全的、单层的文件名。
@@ -90,3 +99,121 @@ def resolve_shared_path(root, rel):
         raise UnsafePath("path escapes the shared directory")
 
     return candidate
+
+
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$", re.IGNORECASE)
+
+
+def parse_range(header, size):
+    # type: (str, int) -> object
+    """解析单段 HTTP Range，返回闭区间 ``(start, end)``。
+
+    ``header`` 为 None 时返回 None；非法、多段或越界抛 ``RangeNotSatisfiable``。
+    """
+    if header is None:
+        return None
+    if not isinstance(header, str) or size <= 0:
+        raise RangeNotSatisfiable(size)
+
+    value = header.strip()
+    if "," in value:
+        raise RangeNotSatisfiable(size)
+
+    match = _RANGE_RE.match(value)
+    if not match:
+        raise RangeNotSatisfiable(size)
+
+    start_text, end_text = match.groups()
+    if not start_text and not end_text:
+        raise RangeNotSatisfiable(size)
+
+    if not start_text:
+        suffix = int(end_text)
+        if suffix <= 0:
+            raise RangeNotSatisfiable(size)
+        return (max(0, size - suffix), size - 1)
+
+    start = int(start_text)
+    if start >= size:
+        raise RangeNotSatisfiable(size)
+
+    if end_text:
+        end = int(end_text)
+        if end < start:
+            raise RangeNotSatisfiable(size)
+        end = min(end, size - 1)
+    else:
+        end = size - 1
+
+    return (start, end)
+
+
+def iter_files(root):
+    # type: (Path) -> list
+    """递归列出共享目录中的可见文件，返回相对 POSIX 路径的元数据。"""
+    root_text = str(root)
+    entries = []
+
+    for dirpath, dirnames, filenames in os.walk(root_text, followlinks=False):
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not name.startswith(".")
+            and not os.path.islink(os.path.join(dirpath, name))
+        ]
+
+        for name in filenames:
+            if name.startswith(".") or name.startswith("~$"):
+                continue
+
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full):
+                continue
+
+            try:
+                stat = os.stat(full)
+            except OSError:
+                continue
+
+            rel = os.path.relpath(full, root_text).replace(os.sep, "/")
+            try:
+                rel.encode("utf-8")
+            except UnicodeEncodeError:
+                continue
+
+            entries.append(
+                {
+                    "path": rel,
+                    "name": name,
+                    "size": stat.st_size,
+                    "mtime": int(stat.st_mtime),
+                }
+            )
+
+    entries.sort(key=lambda item: item["path"].casefold())
+    return entries
+
+
+def numbered_name(name, index):
+    # type: (str, int) -> str
+    """给同名文件生成 ``stem (index)suffix``；index 为 0 时返回原名。"""
+    if index <= 0:
+        return name
+    stem, suffix = os.path.splitext(name)
+    return "%s (%d)%s" % (stem, index, suffix)
+
+
+def format_size(size):
+    # type: (int) -> str
+    """把字节数格式化为人类可读的 B/KB/MB/GB/TB。"""
+    size = int(size)
+    if size < 1024:
+        return "%d B" % size
+
+    value = float(size)
+    for unit in ("KB", "MB", "GB", "TB"):
+        value /= 1024.0
+        if value < 1024 or unit == "TB":
+            return "%.1f %s" % (value, unit)
+
+    return "%.1f TB" % value
