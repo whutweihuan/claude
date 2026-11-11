@@ -636,7 +636,8 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
         self.state.emit(
             kind="upload",
             phase="done",
-            name=destination.name,
+            name=name,
+            saved_name=destination.name,
             done=length,
             size=length,
         )
