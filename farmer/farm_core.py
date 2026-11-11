@@ -125,3 +125,24 @@ class FarmState:
             raise ValueError("浇水冷却中")
         plot.water_count += 1
         plot.last_water_at = now
+
+    def harvest(self, index: int, now: float) -> str:
+        self._require_index(index)
+        plot = self.plots[index]
+        if plot is None:
+            raise ValueError("这块地没有作物")
+        if self.remaining_seconds(index, now) > 0.0:
+            raise ValueError("还没成熟")
+        crop_id = plot.crop_id
+        self.warehouse[crop_id] = self.warehouse.get(crop_id, 0) + 1
+        self.plots[index] = None
+        self.total_harvests += 1
+        return crop_id
+
+    def harvest_all(self, now: float) -> int:
+        harvested = 0
+        for index in range(MAX_PLOTS):
+            if self.plots[index] is not None and self.remaining_seconds(index, now) == 0.0:
+                self.harvest(index, now)
+                harvested += 1
+        return harvested

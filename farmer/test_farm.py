@@ -123,3 +123,36 @@ class WateringTests(unittest.TestCase):
         self.state.water(0, self.t0)
         self.assertFalse(self.state.can_water(0, self.t0 + 599))
         self.assertTrue(self.state.can_water(0, self.t0 + 600))
+
+
+class HarvestTests(unittest.TestCase):
+    def setUp(self):
+        self.state = FarmState()
+        self.state.coins = 1000
+        self.t0 = 1_700_000_000.0
+
+    def test_harvest_rejects_unripe_crop(self):
+        self.state.plant(0, "xiaobaicai", self.t0)
+        with self.assertRaisesRegex(ValueError, "还没成熟"):
+            self.state.harvest(0, self.t0 + 10)
+
+    def test_harvest_puts_crop_in_warehouse_and_clears_plot(self):
+        self.state.plant(0, "xiaobaicai", self.t0)
+        coins_before = self.state.coins
+        crop_id = self.state.harvest(0, self.t0 + 1800)
+        self.assertEqual(crop_id, "xiaobaicai")
+        self.assertEqual(self.state.warehouse, {"xiaobaicai": 1})
+        self.assertIsNone(self.state.plots[0])
+        self.assertEqual(self.state.coins, coins_before)
+        self.assertEqual(self.state.total_harvests, 1)
+        self.assertEqual(self.state.total_income, 0)
+
+    def test_harvest_all_counts_only_ripe_crops(self):
+        self.state.plant(0, "xiaobaicai", self.t0)
+        self.state.plant(1, "xiaobaicai", self.t0)
+        self.state.plant(2, "huluobo", self.t0)
+        harvested = self.state.harvest_all(self.t0 + 1800)
+        self.assertEqual(harvested, 2)
+        self.assertEqual(self.state.warehouse, {"xiaobaicai": 2})
+        self.assertIsNotNone(self.state.plots[2])
+        self.assertEqual(self.state.harvest_all(self.t0 + 1800), 0)
