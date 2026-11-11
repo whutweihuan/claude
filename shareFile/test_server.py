@@ -189,3 +189,116 @@ class DownloadTests(ServerTestCase):
             t.join()
         self.assertEqual(len(results), 3)
         self.assertTrue(all(r == self.payload for r in results))
+
+
+class UploadTests(ServerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login()
+        self.headers = {"X-Requested-With": "shareFile"}
+
+    def upload(self, name, data):
+        return self.request(
+            "PUT", "/api/upload?name=" + urllib.parse.quote(name),
+            data, self.headers,
+        )
+
+    def test_upload_requires_login(self):
+        resp, _ = self.request(
+            "PUT", "/api/upload?name=a.txt", b"x",
+            {"X-Requested-With": "shareFile"}, auth=False,
+        )
+        self.assertEqual(resp.status, 401)
+
+    def test_upload_and_download_roundtrip_utf8_name(self):
+        data = os.urandom(8 * 1024 * 1024)
+        name = "手机 录像 01.mp4"
+        resp, body = self.upload(name, data)
+        self.assertEqual(resp.status, 201)
+        self.assertEqual(json.loads(body)["name"], name)
+        self.assertEqual((self.root / name).read_bytes(), data)
+        resp, got = self.request("GET", "/download?path=" + urllib.parse.quote(name))
+        self.assertEqual(got, data)
+        resp, listing = self.request("GET", "/api/files")
+        self.assertIn(name, [f["path"] for f in json.loads(listing)["files"]])
+
+    def test_duplicate_upload_gets_suffix(self):
+        self.upload("a.txt", b"hello")
+        resp, body = self.upload("a.txt", b"world")
+        self.assertEqual(json.loads(body)["name"], "a (1).txt")
+        self.assertEqual((self.root / "a.txt").read_bytes(), b"hello")
+        self.assertEqual((self.root / "a (1).txt").read_bytes(), b"world")
+
+    def test_name_with_traversal_stays_in_root(self):
+        resp, body = self.upload("../../evil.txt", b"x")
+        self.assertEqual(resp.status, 201)
+        self.assertEqual(json.loads(body)["name"], "evil.txt")
+        self.assertFalse((self.tmp / "evil.txt").exists())
+        self.assertTrue((self.root / "evil.txt").exists())
+
+    def test_empty_body_rejected(self):
+        resp, _ = self.upload("a.txt", b"")
+        self.assertEqual(resp.status, 400)
+
+    def test_missing_csrf_header_rejected(self):
+        resp, _ = self.request("PUT", "/api/upload?name=a.txt", b"x", {})
+        self.assertEqual(resp.status, 403)
+
+    def test_read_only_rejects_upload_but_allows_listing(self):
+        self.server.state.set_read_only(True)
+        resp, _ = self.upload("a.txt", b"x")
+        self.assertEqual(resp.status, 403)
+        resp, body = self.request("GET", "/api/files")
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(json.loads(body)["read_only"])
+
+    def test_aborted_upload_leaves_no_file_or_temp(self):
+        body = b"x" * 1024
+        raw = (
+            "PUT /api/upload?name=broken.bin HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Cookie: %s\r\n"
+            "X-Requested-With: shareFile\r\n"
+            "Content-Length: 1048576\r\n\r\n" % self.cookie
+        ).encode("ascii")
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        sock.sendall(raw + body)
+        sock.close()
+        time.sleep(0.5)
+        self.assertFalse((self.root / "broken.bin").exists())
+        temp_dir = self.root / ".sharefile-tmp"
+        leftovers = list(temp_dir.glob("*")) if temp_dir.exists() else []
+        self.assertEqual(leftovers, [])
+
+    def test_concurrent_same_name_uploads_get_unique_names(self):
+        names = []
+        errors = []
+
+        def worker(value):
+            try:
+                resp, body = self.upload("same.txt", bytes([value]) * 4096)
+                if resp.status != 201:
+                    errors.append(resp.status)
+                else:
+                    names.append(json.loads(body)["name"])
+            except Exception as exc:
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(1, 4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(set(names)), 3)
+        self.assertEqual(sorted(p.name for p in self.root.glob("same*")),
+                         sorted(["same.txt", "same (1).txt", "same (2).txt"]))
+
+    def test_switch_shared_dir_applies_to_new_uploads(self):
+        new_root = self.tmp / "new"
+        new_root.mkdir()
+        self.server.set_shared_dir(new_root)
+        resp, body = self.upload("moved.txt", b"new")
+        self.assertEqual(resp.status, 201)
+        self.assertTrue((new_root / "moved.txt").exists())
+        self.assertFalse((self.root / "moved.txt").exists())

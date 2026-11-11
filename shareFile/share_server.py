@@ -1,5 +1,6 @@
 """shareFile 的 HTTP 服务：口令会话、文件列表、上传与下载。"""
 
+import errno
 import json
 import math
 import os
@@ -24,7 +25,12 @@ LISTING_CACHE_SECONDS = 1.0
 CSRF_HEADER = "X-Requested-With"
 CSRF_VALUE = "shareFile"
 DOWNLOAD_BLOCK = 4 * 1024 * 1024
+UPLOAD_BLOCK = 1024 * 1024
 PROGRESS_INTERVAL = 0.25
+
+
+class ShortUpload(Exception):
+    """客户端在 Content-Length 之前断开。"""
 
 
 class RateLimited(Exception):
@@ -261,17 +267,20 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
     # ---- 响应工具 ----
 
     def _send(self, status, body, content_type, extra_headers=None):
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Cache-Control", "no-store")
-        for key, value in extra_headers or []:
-            self.send_header(key, value)
-        self.end_headers()
-        if body:
-            self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
+            for key, value in extra_headers or []:
+                self.send_header(key, value)
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
 
     def _json(self, status, payload, extra_headers=None):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -345,8 +354,11 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not_found"})
 
     def do_PUT(self):
-        self.close_connection = True
-        self._json(404, {"error": "not_found"})
+        if urlparse(self.path).path == "/api/upload":
+            self._handle_upload()
+        else:
+            self.close_connection = True
+            self._json(404, {"error": "not_found"})
 
     # ---- API ----
 
@@ -526,3 +538,129 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
         self.state.emit(
             kind="download", phase="done", name=name, done=length, size=length
         )
+
+    def _handle_upload(self):
+        if not self._require_auth():
+            self.close_connection = True
+            return
+
+        if self.headers.get(CSRF_HEADER) != CSRF_VALUE:
+            self._reject(403, {"error": "forbidden"})
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except (TypeError, ValueError):
+            self._reject(411, {"error": "length_required"})
+            return
+
+        if length <= 0:
+            self._reject(400, {"error": "empty_body"})
+            return
+
+        if not self.state.can_write():
+            self._reject(403, {"error": "read_only"})
+            return
+
+        query = parse_qs(urlparse(self.path).query)
+        name = core.sanitize_filename((query.get("name") or [""])[0])
+        root = self.state.shared_dir
+        temp_dir = root / ".sharefile-tmp"
+        temp_path = temp_dir / ("upload-%s.part" % secrets.token_hex(8))
+
+        self.state.emit(kind="upload", phase="start", name=name, size=length)
+        started = time.time()
+        last_emit = started
+        done = 0
+        handle = None
+        destination = None
+
+        try:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            handle = open(str(temp_path), "wb")
+
+            while done < length:
+                chunk = self.rfile.read(min(UPLOAD_BLOCK, length - done))
+                if not chunk:
+                    raise ShortUpload()
+                handle.write(chunk)
+                done += len(chunk)
+
+                now = time.time()
+                if now - last_emit >= PROGRESS_INTERVAL:
+                    self.state.emit(
+                        kind="upload",
+                        phase="progress",
+                        name=name,
+                        done=done,
+                        total=length,
+                        speed=done / max(now - started, 1e-6),
+                    )
+                    last_emit = now
+
+            handle.close()
+            handle = None
+            destination = self._finalize_upload(root, name, temp_path)
+        except ShortUpload:
+            self.state.emit(kind="upload", phase="error", name=name)
+            self._reject(400, {"error": "short_body"})
+            return
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.state.emit(kind="upload", phase="error", name=name)
+            self.close_connection = True
+            return
+        except OSError as exc:
+            self.state.emit(kind="upload", phase="error", name=name)
+            status = 507 if exc.errno == errno.ENOSPC else 500
+            self._reject(
+                status, {"error": "disk_full" if status == 507 else "write_failed"}
+            )
+            return
+        finally:
+            if handle is not None:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            try:
+                temp_dir.rmdir()
+            except OSError:
+                pass
+
+        self.state.invalidate_listing()
+        self.state.emit(
+            kind="upload",
+            phase="done",
+            name=destination.name,
+            done=length,
+            size=length,
+        )
+        self._json(201, {"name": destination.name, "size": length})
+
+    def _finalize_upload(self, root, name, temp_path):
+        for index in range(10000):
+            candidate = root / core.numbered_name(name, index)
+            try:
+                fd = os.open(
+                    str(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666
+                )
+            except FileExistsError:
+                continue
+
+            os.close(fd)
+            try:
+                os.replace(str(temp_path), str(candidate))
+            except OSError:
+                try:
+                    os.unlink(str(candidate))
+                except OSError:
+                    pass
+                raise
+            return candidate
+
+        raise OSError(errno.EEXIST, "too many files with the same name")
