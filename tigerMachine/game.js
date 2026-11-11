@@ -38,6 +38,15 @@
     el.classList.remove('hidden');
   });
 
+  window.addEventListener('pointerdown', () => TigerAudio.init(), { once: true });
+  window.addEventListener('keydown', (event) => {
+    TigerAudio.init();
+    if (event.key === 'F9') {
+      event.preventDefault();
+      TigerAudio.demo();
+    }
+  });
+
   fit();
   requestAnimationFrame(frame);
 })();
