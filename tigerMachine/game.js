@@ -48,6 +48,7 @@
     winIndices: [],
     particles: [],
     autoTimer: null,
+    renderTimer: null,
     guessBusy: false,
     spinCount: 0,
     feature: null,
@@ -286,7 +287,7 @@
     ctx.globalAlpha = 1;
   }
 
-  function draw(t) {
+  function renderFrame(t) {
     TigerRender.drawBoard(ctx, {
       ring: TigerEngine.RING,
       symbols: TigerEngine.SYMBOLS,
@@ -297,8 +298,31 @@
       phase: ui.phase,
       time: t,
     });
+
+    if (ui.phase === 'train' && ui.train) {
+      TigerRender.drawTrain(ctx, ui.train.progress, ui.train.carriages, ui.train.reveal);
+    }
+    if (ui.phase === 'gate' && ui.gate) {
+      TigerRender.drawGateWheel(ctx, ui.gate.wheel, ui.gate.spin, ui.gate.open, ui.gate.done);
+    }
+
     drawParticles(t);
+  }
+
+  function draw(t) {
+    renderFrame(t);
     requestAnimationFrame(draw);
+  }
+
+  function startRenderFallback() {
+    if (ui.renderTimer) return;
+    ui.renderTimer = setInterval(() => renderFrame(performance.now()), 60);
+  }
+
+  function stopRenderFallback() {
+    if (!ui.renderTimer) return;
+    clearInterval(ui.renderTimer);
+    ui.renderTimer = null;
   }
 
   function animateSpin(result) {
@@ -354,37 +378,170 @@
     els.banner.classList.remove('is-big');
   }
 
-  async function playFeature(feature) {
-    const label = feature.type === 'train' ? '开火车啦' : feature.name;
-    const big = feature.type === 'bigThree' || feature.type === 'gate';
+  function animateValue(duration, onUpdate) {
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      let settled = false;
+      let lastP = 0;
+      let safety = null;
+
+      function finish() {
+        if (settled) return;
+        settled = true;
+        if (safety) clearTimeout(safety);
+        onUpdate(1);
+        resolve();
+      }
+
+      safety = setTimeout(finish, duration + 150);
+      function step(now) {
+        if (settled) return;
+        const raw = (now - t0) / duration;
+        const p = Math.max(lastP, Math.min(1, Math.max(0, raw)));
+        lastP = p;
+        onUpdate(p);
+        if (p < 1) requestAnimationFrame(step);
+        else finish();
+      }
+      onUpdate(0);
+      requestAnimationFrame(step);
+    });
+  }
+
+  async function animateTriple(feature, big) {
+    const label = big ? '大三元' : '小三元';
     showBanner(label, big);
+    showStatus(`${label}！`);
+    TigerAudio.fanfare();
+    TigerAudio.speak(label);
+    ui.winIndices = [];
 
-    if (feature.type === 'train') {
-      TigerAudio.whistle();
-      setTimeout(() => TigerAudio.speak('开火车啦'), 120);
-    } else if (feature.type === 'gate') {
-      TigerAudio.fanfare();
-      TigerAudio.speak('天门');
-    } else if (feature.type === 'bigThree') {
-      TigerAudio.fanfare();
-      TigerAudio.speak('大三元');
-    } else {
-      TigerAudio.win();
-      TigerAudio.speak('小三元');
+    for (const item of feature.symbols) {
+      ui.winIndices = ui.winIndices.concat(item.indices);
+      const pos = lampPosition(item.indices[0]);
+      spawnParticles(pos.x, pos.y, big ? 28 : 16);
+      TigerAudio.tick(0.85);
+      if (item.win > 0) {
+        showStatus(`${item.name} ${item.odds}× · +${fmt(item.win)}`);
+      } else {
+        showStatus(`${item.name} 亮灯，没有押中`);
+      }
+      renderFrame(performance.now());
+      await sleep(FAST ? 90 : 250);
     }
 
-    if (feature.type === 'gate') {
-      showStatus(`${feature.wheel.label} ${feature.wheel.multiplier}× · 总奖金 ${fmt(feature.win)}`);
-    } else if (feature.type === 'train') {
-      const hits = feature.carriages.filter((carriage) => carriage.win > 0).length;
-      showStatus(`开火车 ${hits} 节中奖 · 总奖金 ${fmt(feature.win)}`);
-    } else {
-      showStatus(`${feature.name} · 总奖金 ${fmt(feature.win)}`);
+    if (big) {
+      app.classList.add('is-shaking');
+      setTimeout(() => app.classList.remove('is-shaking'), FAST ? 260 : 520);
+      spawnParticles(340, 340, 90);
     }
 
-    spawnParticles(340, 340, big ? 90 : 55);
-    await sleep(FAST ? 600 : 1800);
+    if (feature.win > 0) TigerAudio.win();
+    showStatus(`${label} · 总奖金 ${fmt(feature.win)}`);
+    await sleep(FAST ? 500 : 1200);
+    ui.winIndices = [];
     hideBanner();
+    renderFrame(performance.now());
+  }
+
+  async function animateTrain(feature) {
+    showBanner('开火车啦', true);
+    showStatus('开火车啦…');
+    TigerAudio.whistle();
+    setTimeout(() => TigerAudio.speak('开火车啦'), 120);
+
+    ui.phase = 'train';
+    ui.train = { progress: 0, reveal: 0, carriages: feature.carriages };
+    ui.winIndices = [];
+
+    await animateValue(FAST ? 250 : 700, (p) => {
+      ui.train.progress = p;
+      renderFrame(performance.now());
+    });
+    if (DEBUG) els.probe.textContent = `train progress=${ui.train.progress}`;
+
+    for (let i = 0; i < feature.carriages.length; i++) {
+      const carriage = feature.carriages[i];
+      ui.train.reveal = i + 1;
+      if (DEBUG) els.probe.textContent = `train progress=${ui.train.progress} reveal=${ui.train.reveal}`;
+      if (carriage.win > 0) {
+        ui.winIndices = [carriage.stopIndex];
+        const pos = lampPosition(carriage.stopIndex);
+        spawnParticles(pos.x, pos.y, 22);
+        TigerAudio.win();
+        const sym = symbolById[carriage.symbolId];
+        showStatus(`第 ${i + 1} 节 · ${sym.name} +${fmt(carriage.win)}`);
+      } else {
+        ui.winIndices = [];
+        TigerAudio.tick(0.2);
+        showStatus(`第 ${i + 1} 节 · 空车`);
+      }
+      renderFrame(performance.now());
+      await sleep(FAST ? 160 : 450);
+    }
+
+    ui.winIndices = [];
+    showStatus(`开火车 · 总奖金 ${fmt(feature.win)}`);
+    if (feature.win > 0) {
+      TigerAudio.win();
+      spawnParticles(340, 592, 50);
+    }
+    renderFrame(performance.now());
+    await sleep(FAST ? 500 : 1200);
+    ui.phase = 'idle';
+    ui.train = null;
+    ui.winIndices = [];
+    hideBanner();
+    renderFrame(performance.now());
+  }
+
+  async function animateGate(feature) {
+    showBanner('天门', true);
+    showStatus('天门转动中…');
+    TigerAudio.fanfare();
+    TigerAudio.speak('天门');
+
+    ui.phase = 'gate';
+    ui.gate = { wheel: feature.wheel, open: 0, spin: 0, done: false };
+    ui.winIndices = [];
+
+    await animateValue(FAST ? 180 : 500, (p) => {
+      ui.gate.open = p;
+      renderFrame(performance.now());
+    });
+
+    await animateValue(FAST ? 500 : 1500, (p) => {
+      ui.gate.spin = 1 - Math.pow(1 - p, 3);
+      renderFrame(performance.now());
+    });
+
+    ui.gate.done = true;
+    showStatus(`${feature.wheel.label} ${feature.wheel.multiplier}× · 总奖金 ${fmt(feature.win)}`);
+    TigerAudio.win();
+    spawnParticles(340, 340, 70);
+    renderFrame(performance.now());
+    await sleep(FAST ? 600 : 1400);
+
+    ui.phase = 'idle';
+    ui.gate = null;
+    hideBanner();
+    renderFrame(performance.now());
+  }
+
+  async function playFeature(feature) {
+    startRenderFallback();
+    try {
+      if (feature.type === 'smallThree' || feature.type === 'bigThree') {
+        return await animateTriple(feature, feature.type === 'bigThree');
+      }
+      if (feature.type === 'train') return await animateTrain(feature);
+      if (feature.type === 'gate') return await animateGate(feature);
+    } finally {
+      stopRenderFallback();
+      ui.phase = 'idle';
+      ui.train = null;
+      ui.gate = null;
+    }
   }
 
   async function finishRound(result) {
