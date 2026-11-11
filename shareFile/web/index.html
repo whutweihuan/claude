@@ -44,6 +44,21 @@
     <p id="status-line" class="status" role="status"></p>
   </main>
 
+  <div id="preview" class="preview" role="dialog" aria-modal="true"
+       aria-label="图片预览" hidden>
+    <div class="preview-bar">
+      <span id="preview-name" class="preview-name"></span>
+      <button id="preview-close" type="button" class="preview-close"
+              aria-label="关闭预览">关闭</button>
+    </div>
+    <button id="preview-prev" type="button" class="preview-nav preview-prev"
+            aria-label="上一张">‹</button>
+    <img id="preview-image" class="preview-image" alt="">
+    <button id="preview-next" type="button" class="preview-nav preview-next"
+            aria-label="下一张">›</button>
+    <p id="preview-status" class="preview-status" role="status"></p>
+  </div>
+
   <script src="/static/app.js" defer></script>
 </body>
 </html>

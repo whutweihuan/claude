@@ -10,6 +10,7 @@
 - 文本文件、视频文件原样传输，流式读写，内存占用不随文件大小增长。
 - 下载支持 `Range`，断点续传、Safari 大文件下载更稳。
 - 网页上传显示进度和速度，可取消，同时最多 3 个文件。
+- 网页文件列表里，图片显示缩略图，点一下可全屏预览并左右切换；视频显示播放图标。
 - 同名文件自动保存为 `name (1).ext`，绝不覆盖。
 - 4 位口令保护；连续输错 5 次锁定 60 秒；网页端不能删除或重命名。
 - 内置纯 Python 二维码编码器，离线可用；如果安装了 `segno` 会优先使用它。
@@ -52,7 +53,10 @@ sudo apt install python3-tk
 python -m pip install -r requirements.txt
 ```
 
-`requirements.txt` 里只有被注释的 `segno`，装与不装都不影响运行。
+`requirements.txt` 里的 `segno` 和 `Pillow` 都是可选的：
+
+- `segno`：优先用它生成二维码；不装就用内置编码器。
+- `Pillow`：为网页文件列表生成图片缩略图；不装时图片行显示“图片”占位块，预览和下载仍可用。
 
 ## 使用
 
@@ -79,6 +83,7 @@ python -m pip install -r requirements.txt
 
 - 默认共享目录：`shareFile/shared/`；选择其他目录后写入 `shareFile/config.json`。
 - 隐藏文件、`~$` 开头的 Office 临时文件、`.sharefile-tmp/` 不会出现在网页列表里。
+- 缩略图只缓存在内存里（按文件路径、修改时间、大小判断是否过期），不会往共享目录写额外文件。
 - 上传先写入 `.sharefile-tmp/`，完成后原子移动到共享目录；中断不会留下半截文件。
 - 口令每次启动随机生成；登录会话保持 12 小时。
 - 网页端只提供浏览、下载、上传。删除、重命名、新建子目录请在电脑上操作。
@@ -88,7 +93,8 @@ python -m pip install -r requirements.txt
 - 只适合可信局域网。4 位口令是轻量防护，不是公网安全方案，不要把端口映射到互联网。
 - 不做 NAT 穿透、云中转、账号体系、TLS。
 - 访客 Wi-Fi 若开启“客户端隔离”，设备之间无法互访，这是网络限制。
-- 不做视频在线播放或转码，视频以原文件下载。
+- 不做视频在线播放或转码，视频以原文件下载；网页里只显示播放图标，不抽取视频首帧。
+- 缩略图和预览只支持浏览器能直接显示的位图：jpg/jpeg/png/gif/webp/bmp。SVG、TIFF 等不生成缩略图，仍可下载。
 - iOS 上传很大的文件时，建议保持页面在前台、屏幕不锁定；Safari 下载会进入“文件”App。
 - 网页端上传只进入共享目录根层，不支持在网页里新建子目录。
 
@@ -98,6 +104,9 @@ python -m pip install -r requirements.txt
 cd shareFile
 python -m unittest -v
 node --check web/app.js
+node test_app_js.js
 ```
+
+`python -m unittest` 会自动调用 `test_app_js.js`，单独运行它便于调试网页脚本的文件类型判断。
 
 测试覆盖路径越界、文件名清洗、Range、口令限流、上传中断清理、并发同名上传、并发下载、二维码结构/纠错校验，以及一次真实窗口 + 上传的 GUI 冒烟流程。

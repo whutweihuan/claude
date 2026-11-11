@@ -1,7 +1,10 @@
 import http.client
+import io
 import json
 import os
+import shutil
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -399,13 +402,136 @@ class UnavailableDirTests(ServerTestCase):
         self.assertEqual(resp.status, 503)
 
 
+class ThumbnailTests(ServerTestCase):
+    def setUp(self):
+        super().setUp()
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        self.Image = Image
+        self.name = "photo.jpg"
+        self.image = self.root / self.name
+        Image.new("RGB", (800, 400), (200, 10, 10)).save(str(self.image))
+        self.login()
+
+    def thumb_path(self, name=None):
+        return "/thumbnail?path=" + urllib.parse.quote(name or self.name)
+
+    def test_thumbnail_is_jpeg_with_side_at_most_320(self):
+        resp, body = self.request("GET", self.thumb_path())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "image/jpeg")
+        self.assertTrue(body.startswith(b"\xff\xd8"))
+        from PIL import Image
+
+        with Image.open(io.BytesIO(body)) as thumb:
+            self.assertLessEqual(max(thumb.size), 320)
+            self.assertGreater(min(thumb.size), 0)
+            self.assertAlmostEqual(thumb.size[0] / thumb.size[1], 2.0, places=1)
+
+    def test_thumbnail_requires_login(self):
+        resp, _ = self.request("GET", self.thumb_path(), auth=False)
+        self.assertEqual(resp.status, 401)
+
+    def test_thumbnail_rejects_non_image_file(self):
+        (self.root / "notes.txt").write_text("hello", encoding="utf-8")
+        resp, _ = self.request("GET", self.thumb_path("notes.txt"))
+        self.assertEqual(resp.status, 404)
+
+    def test_thumbnail_rejects_traversal(self):
+        (self.tmp / "secret.jpg").write_bytes(b"not an image")
+        resp, _ = self.request(
+            "GET", "/thumbnail?path=" + urllib.parse.quote("../secret.jpg")
+        )
+        self.assertIn(resp.status, (400, 403))
+
+    def test_thumbnail_missing_file_is_404(self):
+        resp, _ = self.request("GET", self.thumb_path("missing.jpg"))
+        self.assertEqual(resp.status, 404)
+
+    def test_thumbnail_handles_transparent_png(self):
+        Image = self.Image
+        Image.new("RGBA", (400, 400), (0, 0, 0, 0)).save(
+            str(self.root / "clear.png"), "PNG"
+        )
+        resp, body = self.request("GET", self.thumb_path("clear.png"))
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(body.startswith(b"\xff\xd8"))
+
+    def test_thumbnail_refreshes_when_file_changes(self):
+        _, first = self.request("GET", self.thumb_path())
+        self.Image.new("RGB", (400, 800), (10, 10, 200)).save(str(self.image))
+        stat = self.image.stat()
+        os.utime(str(self.image), (stat.st_atime, stat.st_mtime + 5))
+        _, second = self.request("GET", self.thumb_path())
+        self.assertNotEqual(first, second)
+
+    def test_thumbnail_unavailable_shared_dir_is_503(self):
+        self.server.state.set_usable(False)
+        resp, _ = self.request("GET", self.thumb_path())
+        self.assertEqual(resp.status, 503)
+
+
+class ViewTests(ServerTestCase):
+    def setUp(self):
+        super().setUp()
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        self.payload = self.root / "photo.png"
+        Image.new("RGB", (64, 32), (5, 120, 5)).save(str(self.payload), "PNG")
+        (self.root / "page.svg").write_text(
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8"
+        )
+        self.login()
+
+    def test_view_serves_image_inline(self):
+        resp, body = self.request(
+            "GET", "/view?path=" + urllib.parse.quote("photo.png")
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "image/png")
+        self.assertIn("inline", resp.getheader("Content-Disposition"))
+        self.assertEqual(body, self.payload.read_bytes())
+
+    def test_view_requires_login(self):
+        resp, _ = self.request(
+            "GET", "/view?path=" + urllib.parse.quote("photo.png"), auth=False
+        )
+        self.assertEqual(resp.status, 401)
+
+    def test_view_rejects_non_image(self):
+        (self.root / "notes.txt").write_text("hello", encoding="utf-8")
+        resp, body = self.request(
+            "GET", "/view?path=" + urllib.parse.quote("notes.txt")
+        )
+        self.assertEqual(resp.status, 404)
+        self.assertNotIn(b"hello", body)
+
+    def test_view_rejects_svg(self):
+        resp, body = self.request(
+            "GET", "/view?path=" + urllib.parse.quote("page.svg")
+        )
+        self.assertEqual(resp.status, 404)
+        self.assertNotIn(b"<svg", body)
+
+    def test_view_rejects_traversal(self):
+        resp, _ = self.request(
+            "GET", "/view?path=" + urllib.parse.quote("../secret.png")
+        )
+        self.assertIn(resp.status, (400, 403))
+
+
 class WebAssetTests(ServerTestCase):
     def test_index_contains_both_views_and_controls(self):
         resp, body = self.request("GET", "/", auth=False)
         self.assertEqual(resp.status, 200)
         text = body.decode("utf-8")
         for token in ("login-view", "files-view", "pin-input", "upload-input",
-                      "file-list", "refresh-btn", "readonly-badge"):
+                      "file-list", "refresh-btn", "readonly-badge",
+                      "preview", "preview-image", "preview-close"):
             self.assertIn(token, text)
 
     def test_static_assets_are_served(self):
@@ -414,6 +540,42 @@ class WebAssetTests(ServerTestCase):
             resp, body = self.request("GET", path, auth=False)
             self.assertEqual(resp.status, 200)
             self.assertIn(marker, body.decode("utf-8"))
+
+    def test_app_js_uses_thumbnail_and_view_endpoints(self):
+        resp, body = self.request("GET", "/static/app.js", auth=False)
+        self.assertEqual(resp.status, 200)
+        text = body.decode("utf-8")
+        self.assertIn("/thumbnail?path=", text)
+        self.assertIn("/view?path=", text)
+
+    def test_app_js_classifies_common_image_and_video_names(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        script = str(Path(__file__).resolve().parent / "test_app_js.js")
+        result = subprocess.run(
+            [node, script],
+            cwd=str(Path(__file__).resolve().parent),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        )
+        self.assertEqual(
+            result.returncode, 0, result.stdout.decode("utf-8", "replace")
+        )
+
+    def test_static_assets_are_revalidated(self):
+        for path in ("/static/app.js", "/static/style.css"):
+            resp, _ = self.request("GET", path, auth=False)
+            self.assertIn(
+                "no-cache", (resp.getheader("Cache-Control") or "").lower(), path
+            )
+
+    def test_index_versions_static_assets(self):
+        resp, body = self.request("GET", "/", auth=False)
+        text = body.decode("utf-8")
+        self.assertRegex(text, r"/static/app\.js\?v=[0-9a-f]{12}")
+        self.assertRegex(text, r"/static/style\.css\?v=[0-9a-f]{12}")
 
     def test_unknown_static_file_is_404(self):
         resp, _ = self.request("GET", "/static/../share_server.py", auth=False)

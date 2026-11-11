@@ -1,6 +1,7 @@
 """shareFile 的 HTTP 服务：口令会话、文件列表、上传与下载。"""
 
 import errno
+import hashlib
 import json
 import math
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 import share_core as core
+import share_thumb
 
 SESSION_COOKIE = "sf_session"
 SESSION_MAX_AGE = 43200
@@ -56,6 +58,22 @@ def load_web_assets():
                 assets[name] = handle.read()
         except OSError:
             assets[name] = b""
+
+    version = hashlib.sha256(
+        assets.get("app.js", b"") + b"\0" + assets.get("style.css", b"")
+    ).hexdigest()[:12]
+    index = assets.get("index.html")
+    if index:
+        try:
+            text = index.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:
+            text = text.replace("/static/app.js", "/static/app.js?v=" + version)
+            text = text.replace(
+                "/static/style.css", "/static/style.css?v=" + version
+            )
+            assets["index.html"] = text.encode("utf-8")
     return assets
 
 
@@ -388,6 +406,10 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             self._handle_session()
         elif path == "/api/files":
             self._handle_files()
+        elif path == "/thumbnail":
+            self._handle_thumbnail()
+        elif path == "/view":
+            self._handle_view()
         elif path == "/download":
             self._handle_download(head_only=False)
         elif path == "/":
@@ -453,9 +475,7 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
         if not body:
             self._json(404, {"error": "not_found"})
             return
-        self._send(
-            200, body, content_types[name], cache_control="max-age=3600"
-        )
+        self._send(200, body, content_types[name], cache_control="no-cache")
 
     def _handle_login(self):
         if self.headers.get(CSRF_HEADER) != CSRF_VALUE:
@@ -507,6 +527,109 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             200,
             {"files": self.state.list_files(), "read_only": not self.state.can_write()},
         )
+
+    def _handle_thumbnail(self):
+        if not self._require_auth():
+            return
+        if not self.state.is_usable():
+            self._json(503, {"error": "shared_dir_unavailable"})
+            return
+
+        query = parse_qs(urlparse(self.path).query)
+        rel = (query.get("path") or [""])[0]
+        if not rel:
+            self._json(400, {"error": "missing_path"})
+            return
+
+        try:
+            target = core.resolve_shared_path(self.state.shared_dir, rel)
+        except core.UnsafePath:
+            self._reject(400, {"error": "unsafe_path"})
+            return
+
+        if not share_thumb.is_image_name(target.name):
+            self._json(404, {"error": "not_found"})
+            return
+
+        try:
+            if not target.is_file():
+                self._json(404, {"error": "not_found"})
+                return
+            stat = target.stat()
+        except OSError:
+            self._json(404, {"error": "not_found"})
+            return
+
+        data = share_thumb.get_thumbnail(target, stat)
+        if not data:
+            self._json(404, {"error": "thumbnail_unavailable"})
+            return
+
+        self._send(
+            200, data, "image/jpeg", cache_control="private, max-age=86400"
+        )
+
+    def _handle_view(self):
+        """以内联方式返回原图，仅供网页预览层使用。
+
+        只放行浏览器能直接渲染的位图格式；SVG 等可执行脚本的类型不放行。
+        """
+        if not self._require_auth():
+            return
+        if not self.state.is_usable():
+            self._json(503, {"error": "shared_dir_unavailable"})
+            return
+
+        query = parse_qs(urlparse(self.path).query)
+        rel = (query.get("path") or [""])[0]
+        if not rel:
+            self._json(400, {"error": "missing_path"})
+            return
+
+        try:
+            target = core.resolve_shared_path(self.state.shared_dir, rel)
+        except core.UnsafePath:
+            self._reject(400, {"error": "unsafe_path"})
+            return
+
+        content_type = share_thumb.image_content_type(target.name)
+        if content_type is None:
+            self._json(404, {"error": "not_found"})
+            return
+
+        try:
+            if not target.is_file():
+                self._json(404, {"error": "not_found"})
+                return
+            size = target.stat().st_size
+        except OSError:
+            self._json(404, {"error": "not_found"})
+            return
+
+        disposition = "inline; filename=\"preview\"; filename*=UTF-8''%s" % quote(
+            target.name, safe=""
+        )
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", disposition)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.end_headers()
+
+        try:
+            with open(str(target), "rb") as handle:
+                while True:
+                    chunk = handle.read(DOWNLOAD_BLOCK)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
+        except OSError:
+            self.close_connection = True
 
     def _handle_download(self, head_only):
         if not self._require_auth():

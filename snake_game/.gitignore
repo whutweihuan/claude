@@ -1,0 +1,100 @@
+# ============================================================
+# 通用开发 .gitignore
+# 只忽略生成物、本地配置和临时文件；不要忽略源码、锁文件和
+# 项目需要提交的资源。项目特有的忽略规则请放在各自子目录的
+# .gitignore 里。
+# ============================================================
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---------- 编辑器 / IDE ----------
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.history/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+pip-wheel-metadata/
+MANIFEST
+
+# ---------- Node.js / 前端 ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.npm/
+.yarn/
+.next/
+.nuxt/
+.cache/
+.eslintcache
+*.tsbuildinfo
+
+# ---------- Java / Gradle / Maven ----------
+.gradle/
+target/
+*.class
+hs_err_pid*
+
+# ---------- 构建输出 / 覆盖率 ----------
+build/
+dist/
+coverage/
+out/
+
+# ---------- 环境变量 / 密钥 ----------
+# 保留 .env.example 作为模板，其余本地环境文件不要提交
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ---------- 日志 / 临时文件 ----------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.stackdump
+
+# ---------- 工具 / 工作区 ----------
+.worktrees/
+.superpowers/
+.claude/settings.local.json
+.claude/*.local.json

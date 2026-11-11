@@ -4,11 +4,16 @@
   var CSRF_HEADERS = { "X-Requested-With": "shareFile" };
   var MAX_ACTIVE_UPLOADS = 3;
   var REFRESH_MS = 10000;
+  var IMAGE_RE = /\.(jpe?g|png|gif|webp|bmp)$/i;
+  var VIDEO_RE = /\.(mp4|m4v|mov|webm|avi|mkv)$/i;
 
   var readOnly = false;
   var activeUploads = 0;
   var pendingUploads = [];
   var refreshTimer = null;
+  var imageFiles = [];
+  var previewPath = null;
+  var previewReturnFocus = null;
 
   function byId(id) {
     return document.getElementById(id);
@@ -51,6 +56,7 @@
   }
 
   function showLogin() {
+    closePreview();
     byId("files-view").hidden = true;
     byId("login-view").hidden = false;
     if (refreshTimer) {
@@ -115,6 +121,65 @@
     });
   }
 
+  function fileExtension(name) {
+    var index = String(name || "").lastIndexOf(".");
+    return index >= 0 ? name.slice(index + 1).toLowerCase() : "";
+  }
+
+  function isImage(file) {
+    return IMAGE_RE.test(file.name || file.path || "");
+  }
+
+  function isVideo(file) {
+    return VIDEO_RE.test(file.name || file.path || "");
+  }
+
+  function createPlaceholder(label, extraClass) {
+    var tile = document.createElement("div");
+    tile.className = "thumb thumb-placeholder" + (extraClass ? " " + extraClass : "");
+    if (label) {
+      tile.textContent = label;
+    }
+    return tile;
+  }
+
+  function createThumb(file) {
+    if (!isImage(file)) {
+      if (isVideo(file)) {
+        var videoTile = createPlaceholder("", "thumb-video");
+        videoTile.setAttribute("aria-label", "视频");
+        videoTile.title = "视频";
+        return videoTile;
+      }
+      var extension = fileExtension(file.name || file.path);
+      return createPlaceholder(extension ? extension.slice(0, 4) : "文件");
+    }
+
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "thumb-button";
+    button.setAttribute("aria-label", "预览 " + file.path);
+
+    var image = document.createElement("img");
+    image.className = "thumb";
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.src = "/thumbnail?path=" + encodeURIComponent(file.path) +
+      "&v=" + (file.mtime || 0) + "-" + (file.size || 0);
+    image.addEventListener("error", function () {
+      if (image.parentNode === button) {
+        button.replaceChild(createPlaceholder("图片"), image);
+      }
+    });
+
+    button.appendChild(image);
+    button.addEventListener("click", function () {
+      openPreview(file.path);
+    });
+    return button;
+  }
+
   function renderFiles(files) {
     var list = byId("file-list");
     var empty = byId("empty-state");
@@ -122,9 +187,15 @@
     empty.hidden = files.length > 0;
     list.hidden = files.length === 0;
 
+    imageFiles = files.filter(isImage);
+
     files.forEach(function (file) {
       var row = document.createElement("li");
       row.className = "file-row";
+
+      var thumb = document.createElement("div");
+      thumb.className = "file-thumb";
+      thumb.appendChild(createThumb(file));
 
       var name = document.createElement("span");
       name.className = "file-name";
@@ -140,11 +211,78 @@
       link.href = "/download?path=" + encodeURIComponent(file.path);
       link.setAttribute("download", file.name);
 
+      row.appendChild(thumb);
       row.appendChild(name);
       row.appendChild(meta);
       row.appendChild(link);
       list.appendChild(row);
     });
+  }
+
+  function indexOfPreview(path) {
+    for (var index = 0; index < imageFiles.length; index += 1) {
+      if (imageFiles[index].path === path) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  function showPreview(index) {
+    var file = imageFiles[index];
+    if (!file) {
+      closePreview();
+      return;
+    }
+    previewPath = file.path;
+    byId("preview-name").textContent = file.path;
+    byId("preview-image").alt = file.name || file.path;
+    byId("preview-image").src = "/view?path=" + encodeURIComponent(file.path) +
+      "&v=" + (file.mtime || 0) + "-" + (file.size || 0);
+    byId("preview-status").textContent = imageFiles.length > 1
+      ? (index + 1) + " / " + imageFiles.length
+      : "";
+    var multiple = imageFiles.length > 1;
+    byId("preview-prev").disabled = !multiple;
+    byId("preview-next").disabled = !multiple;
+  }
+
+  function openPreview(path) {
+    var index = indexOfPreview(path);
+    if (index < 0) {
+      return;
+    }
+    previewReturnFocus = document.activeElement;
+    byId("preview").hidden = false;
+    showPreview(index);
+    byId("preview-close").focus();
+  }
+
+  function stepPreview(delta) {
+    if (!previewPath || !imageFiles.length) {
+      return;
+    }
+    var index = indexOfPreview(previewPath);
+    if (index < 0) {
+      closePreview();
+      return;
+    }
+    index = (index + delta + imageFiles.length) % imageFiles.length;
+    showPreview(index);
+  }
+
+  function closePreview() {
+    if (!previewPath) {
+      return;
+    }
+    previewPath = null;
+    byId("preview").hidden = true;
+    byId("preview-image").removeAttribute("src");
+    byId("preview-status").textContent = "";
+    if (previewReturnFocus && previewReturnFocus.focus) {
+      previewReturnFocus.focus();
+    }
+    previewReturnFocus = null;
   }
 
   function createUploadRow(file) {
@@ -353,6 +491,40 @@
         loadFiles();
       }
     });
+
+    byId("preview-close").addEventListener("click", closePreview);
+    byId("preview-prev").addEventListener("click", function () {
+      stepPreview(-1);
+    });
+    byId("preview-next").addEventListener("click", function () {
+      stepPreview(1);
+    });
+    byId("preview").addEventListener("click", function (event) {
+      if (event.target === event.currentTarget) {
+        closePreview();
+      }
+    });
+    byId("preview-image").addEventListener("error", function () {
+      if (previewPath) {
+        byId("preview-status").textContent = "无法加载预览";
+      }
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (!previewPath) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePreview();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        stepPreview(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        stepPreview(1);
+      }
+    });
   }
 
   function init() {
@@ -371,9 +543,15 @@
       .catch(showLogin);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
+  if (typeof document !== "undefined") {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { isImage: isImage, isVideo: isVideo };
   }
 })();

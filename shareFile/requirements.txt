@@ -1,3 +1,7 @@
 # Optional: install segno to prefer it for QR generation.
 # The built-in share_qr.py works without any third-party dependency.
 # segno>=1.5,<2
+
+# Optional: install Pillow to generate image thumbnails for the web file list.
+# Without it, image rows show a placeholder and downloads still work.
+# Pillow>=8
