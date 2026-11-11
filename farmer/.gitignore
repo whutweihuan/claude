@@ -1,0 +1,4 @@
+__pycache__/
+save.json
+save.json.tmp
+save.corrupt-*.json
