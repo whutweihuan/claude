@@ -288,6 +288,91 @@ body {
   letter-spacing: 2px;
 }
 
+.bet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bet-row {
+  flex: none;
+  height: 37px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.bet-row.has-bet {
+  border-color: rgba(88, 224, 106, 0.48);
+  background: rgba(88, 224, 106, 0.075);
+}
+
+.bet-icon {
+  width: 30px;
+  height: 30px;
+  flex: none;
+}
+
+.bet-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #ebcda1;
+}
+
+.bet-odds {
+  width: 34px;
+  flex: none;
+  text-align: right;
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  color: var(--gold);
+}
+
+.bet-btn {
+  width: 22px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid #5c3818;
+  background: linear-gradient(180deg, #34200f, #170b04);
+  color: #e4b473;
+  font-family: "Courier New", monospace;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bet-btn:hover { border-color: var(--gold); color: #fff1c0; }
+.bet-btn:active { transform: translateY(1px); }
+.bet-btn:disabled { opacity: 0.35; cursor: not-allowed; border-color: #4a2c14; color: #9c774f; }
+
+.bet-amount {
+  width: 38px;
+  flex: none;
+  text-align: center;
+  font-family: "Courier New", monospace;
+  font-size: 15px;
+  font-weight: 700;
+  color: #7dffa0;
+  text-shadow: 0 0 6px rgba(20, 220, 90, 0.35);
+}
+
+.btn.is-active {
+  border-color: var(--green);
+  color: #c8ffd2;
+  box-shadow: 0 0 10px rgba(88, 224, 106, 0.35);
+}
+
 /* ---------- 按钮 ---------- */
 
 .actions {

@@ -448,7 +448,7 @@
         collected,
         autoCollected,
         guessCount,
-        jackpot: maybeJackpot(),
+        jackpot: autoCollected ? maybeJackpot() : false,
       };
     }
 
