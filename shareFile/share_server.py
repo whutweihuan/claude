@@ -24,6 +24,8 @@ LOCKOUT_SECONDS = 60
 LISTING_CACHE_SECONDS = 1.0
 CSRF_HEADER = "X-Requested-With"
 CSRF_VALUE = "shareFile"
+WEB_DIR = Path(__file__).resolve().parent / "web"
+WEB_ASSETS = ("index.html", "app.js", "style.css")
 DOWNLOAD_BLOCK = 4 * 1024 * 1024
 UPLOAD_BLOCK = 1024 * 1024
 PROGRESS_INTERVAL = 0.25
@@ -43,6 +45,17 @@ class RateLimited(Exception):
 
 def generate_pin():
     return "%04d" % secrets.randbelow(10000)
+
+
+def load_web_assets():
+    assets = {}
+    for name in WEB_ASSETS:
+        try:
+            with open(str(WEB_DIR / name), "rb") as handle:
+                assets[name] = handle.read()
+        except OSError:
+            assets[name] = b""
+    return assets
 
 
 class ShareState(object):
@@ -161,8 +174,9 @@ class ShareHTTPServer(ThreadingHTTPServer):
     # Windows 的 SO_REUSEADDR 会允许绑定已占用端口，导致端口回退失效。
     allow_reuse_address = os.name != "nt"
 
-    def __init__(self, address, handler, state):
+    def __init__(self, address, handler, state, assets):
         self.state = state
+        self.assets = assets
         super(ShareHTTPServer, self).__init__(address, handler)
 
 
@@ -209,10 +223,13 @@ class ShareServer(object):
                 if self._requested_port + offset <= 65535
             ]
 
+        assets = load_web_assets()
         last_error = None
         for port in candidates:
             try:
-                httpd = ShareHTTPServer((self._host, port), ShareRequestHandler, self._state)
+                httpd = ShareHTTPServer(
+                    (self._host, port), ShareRequestHandler, self._state, assets
+                )
             except OSError as exc:
                 last_error = exc
                 continue
@@ -266,14 +283,15 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
 
     # ---- 响应工具 ----
 
-    def _send(self, status, body, content_type, extra_headers=None):
+    def _send(self, status, body, content_type, extra_headers=None,
+              cache_control="no-store"):
         try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_control)
             for key, value in extra_headers or []:
                 self.send_header(key, value)
             self.end_headers()
@@ -335,6 +353,10 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             self._handle_files()
         elif path == "/download":
             self._handle_download(head_only=False)
+        elif path == "/":
+            self._handle_index()
+        elif path.startswith("/static/"):
+            self._handle_static(path[len("/static/"):])
         else:
             self._json(404, {"error": "not_found"})
 
@@ -364,6 +386,39 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_session(self):
         self._json(200, {"authed": self._authed()})
+
+    def _handle_index(self):
+        body = self.server.assets.get("index.html", b"")
+        if not body:
+            self._json(500, {"error": "web_assets_missing"})
+            return
+        csp = (
+            "default-src 'self'; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+            "connect-src 'self'"
+        )
+        self._send(
+            200,
+            body,
+            "text/html; charset=utf-8",
+            [("Content-Security-Policy", csp)],
+        )
+
+    def _handle_static(self, name):
+        content_types = {
+            "app.js": "application/javascript; charset=utf-8",
+            "style.css": "text/css; charset=utf-8",
+        }
+        if name not in content_types:
+            self._json(404, {"error": "not_found"})
+            return
+        body = self.server.assets.get(name, b"")
+        if not body:
+            self._json(404, {"error": "not_found"})
+            return
+        self._send(
+            200, body, content_types[name], cache_control="max-age=3600"
+        )
 
     def _handle_login(self):
         if self.headers.get(CSRF_HEADER) != CSRF_VALUE:

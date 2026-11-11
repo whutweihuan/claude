@@ -302,3 +302,24 @@ class UploadTests(ServerTestCase):
         self.assertEqual(resp.status, 201)
         self.assertTrue((new_root / "moved.txt").exists())
         self.assertFalse((self.root / "moved.txt").exists())
+
+
+class WebAssetTests(ServerTestCase):
+    def test_index_contains_both_views_and_controls(self):
+        resp, body = self.request("GET", "/", auth=False)
+        self.assertEqual(resp.status, 200)
+        text = body.decode("utf-8")
+        for token in ("login-view", "files-view", "pin-input", "upload-input",
+                      "file-list", "refresh-btn", "readonly-badge"):
+            self.assertIn(token, text)
+
+    def test_static_assets_are_served(self):
+        markers = {"/static/app.js": "X-Requested-With", "/static/style.css": "@media"}
+        for path, marker in markers.items():
+            resp, body = self.request("GET", path, auth=False)
+            self.assertEqual(resp.status, 200)
+            self.assertIn(marker, body.decode("utf-8"))
+
+    def test_unknown_static_file_is_404(self):
+        resp, _ = self.request("GET", "/static/../share_server.py", auth=False)
+        self.assertEqual(resp.status, 404)

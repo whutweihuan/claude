@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>局域网文件共享</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main id="login-view" class="view">
+    <section class="card login-card">
+      <h1>局域网文件共享</h1>
+      <p class="hint">输入电脑窗口上显示的 4 位口令</p>
+      <form id="login-form">
+        <input id="pin-input" type="text" inputmode="numeric" pattern="[0-9]*"
+               maxlength="4" autocomplete="one-time-code" placeholder="0000" required>
+        <button id="login-btn" type="submit">进入</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+    </section>
+  </main>
+
+  <main id="files-view" class="view" hidden>
+    <header class="toolbar">
+      <div class="title-row">
+        <span id="folder-name" class="folder-name">共享文件</span>
+        <span id="readonly-badge" class="badge" hidden>只读</span>
+      </div>
+      <div class="actions">
+        <button id="refresh-btn" type="button">刷新</button>
+        <label class="button upload-label">
+          上传
+          <input id="upload-input" type="file" multiple hidden>
+        </label>
+        <button id="logout-btn" type="button" class="secondary">退出</button>
+      </div>
+    </header>
+
+    <div id="drop-zone" class="drop-zone">把文件拖到这里，或点“上传”</div>
+
+    <ul id="file-list" class="file-list"></ul>
+    <p id="empty-state" class="empty" hidden>共享文件夹还是空的，点上传或把文件拖进来。</p>
+    <ul id="upload-queue" class="upload-queue"></ul>
+    <p id="status-line" class="status" role="status"></p>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
