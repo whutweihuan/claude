@@ -38,6 +38,12 @@ def format_remaining(seconds: float) -> str:
     return "{:02d}:{:02d}".format(minutes, secs)
 
 
+def format_duration(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return "{}时".format(seconds // 3600)
+    return "{}分".format(seconds // 60)
+
+
 class PlotCard(tk.Frame):
     WIDTH = 200
     CANVAS_HEIGHT = 134
@@ -234,6 +240,21 @@ class FarmApp(tk.Tk):
 
         self.seed_frame = tk.Frame(self, bg=BG, padx=12, pady=8)
         self.seed_frame.pack(side="bottom", fill="x")
+        tk.Label(self.seed_frame, text="种子：", font=FONT, bg=BG, fg=TEXT).pack(
+            side="left", padx=(0, 6)
+        )
+        self.seed_buttons = {}
+        for crop in CROPS.values():
+            button = tk.Button(
+                self.seed_frame,
+                text="{} {}/{}".format(
+                    crop.name, format_duration(crop.grow_seconds), crop.seed_price
+                ),
+                font=FONT, bd=1, relief="raised", padx=8, pady=3,
+                command=lambda crop_id=crop.crop_id: self._on_seed_click(crop_id),
+            )
+            button.pack(side="left", padx=3)
+            self.seed_buttons[crop.crop_id] = button
 
         body = tk.Frame(self, bg=BG, padx=12, pady=12)
         body.pack(side="top", fill="both", expand=True)
@@ -261,6 +282,7 @@ class FarmApp(tk.Tk):
         for index, card in enumerate(self.plot_cards):
             card.render(self.state, index, now)
         self._update_header()
+        self._update_seed_buttons()
         self._update_title(now)
         return now
 
@@ -280,11 +302,85 @@ class FarmApp(tk.Tk):
         )
         self.title("小菜园（{} 可收）".format(ripe) if ripe else "小菜园")
 
+    def _update_seed_buttons(self):
+        for crop_id, button in self.seed_buttons.items():
+            crop = CROPS[crop_id]
+            selected = crop_id == self.state.selected_crop
+            affordable = self.state.coins >= crop.seed_price
+            button.configure(
+                relief="sunken" if selected else "raised",
+                bg="#CDE0C7" if affordable else "#DDD4C4",
+                fg=TEXT if affordable else "#9A8F7F",
+            )
+
+    def set_status(self, text, seconds=3):
+        self.status_var.set(text)
+        if self._status_reset_id is not None:
+            try:
+                self.after_cancel(self._status_reset_id)
+            except tk.TclError:
+                pass
+        self._status_reset_id = self.after(seconds * 1000, self._reset_status)
+
+    def _reset_status(self):
+        self._status_reset_id = None
+        self.status_var.set("选一种种子，点空地种下")
+
+    def _on_seed_click(self, crop_id):
+        crop = CROPS.get(crop_id)
+        if crop is None:
+            return
+        self.state.selected_crop = crop_id
+        self.set_status("已选择{}".format(crop.name))
+        self._save()
+        self.refresh()
+
     def _on_plot_click(self, index):
-        pass  # 任务 9 实现
+        if index >= MAX_PLOTS:
+            return
+        if index >= self.state.unlocked_plots:
+            self.set_status("这块地还没开垦")
+            return
+        now = self.clock()
+        plot = self.state.plots[index]
+        if plot is None:
+            crop_id = self.state.selected_crop
+            crop = CROPS.get(crop_id)
+            try:
+                self.state.plant(index, crop_id, now)
+            except ValueError as exc:
+                self.set_status(str(exc))
+                return
+            self.set_status("种下了{}".format(crop.name))
+            self._save()
+            self.refresh()
+            return
+        crop = CROPS.get(plot.crop_id)
+        if crop is None:
+            self.set_status("这块地没有作物")
+            return
+        if self.state.is_mature(index, now):
+            try:
+                self.state.harvest(index, now)
+            except ValueError as exc:
+                self.set_status(str(exc))
+                return
+            self.set_status("收获了{}".format(crop.name))
+            self._save()
+            self.refresh()
+            return
+        remaining = self.state.remaining_seconds(index, now)
+        self.set_status("{}还需 {}".format(crop.name, format_remaining(remaining)))
 
     def _on_water_click(self, index):
-        pass  # 任务 9 实现
+        try:
+            self.state.water(index, self.clock())
+        except ValueError as exc:
+            self.set_status(str(exc))
+            return
+        self.set_status("浇水成功，生长加快")
+        self._save()
+        self.refresh()
 
     def _save(self):
         save_state(self.state, self.save_path)
