@@ -1,7 +1,11 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from farm_core import (
     CROPS, INITIAL_COINS, INITIAL_PLOTS, LAND_PRICES, MAX_PLOTS, FarmState,
+    Plot, load_state, save_state,
 )
 
 
@@ -204,3 +208,90 @@ class LandTests(unittest.TestCase):
             self.assertEqual(state.buy_land(), expected)
         with self.assertRaisesRegex(ValueError, "全部开垦"):
             state.buy_land()
+
+
+class SaveLoadTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "save.json"
+        self.t0 = 1_700_000_000.0
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_roundtrip_preserves_state(self):
+        state = FarmState()
+        state.plant(0, "fanqie", self.t0)
+        state.water(0, self.t0 + 60)
+        state.plots[1] = Plot("xiaobaicai", self.t0 + 10)
+        state.coins = 123
+        state.total_harvests = 7
+        state.total_income = 456
+        state.warehouse = {"fanqie": 3}
+        save_state(state, self.path)
+        loaded, warning = load_state(self.path)
+        self.assertIsNone(warning)
+        self.assertEqual(loaded.coins, 123)
+        self.assertEqual(loaded.total_harvests, 7)
+        self.assertEqual(loaded.total_income, 456)
+        self.assertEqual(loaded.warehouse, {"fanqie": 3})
+        self.assertEqual(loaded.plots[0].crop_id, "fanqie")
+        self.assertEqual(loaded.plots[0].water_count, 1)
+        self.assertEqual(loaded.plots[1].crop_id, "xiaobaicai")
+        self.assertIsNone(loaded.plots[2])
+
+    def test_offline_growth_uses_real_timestamps(self):
+        state = FarmState()
+        state.plant(0, "xiaobaicai", self.t0)
+        save_state(state, self.path)
+        loaded, _ = load_state(self.path)
+        self.assertTrue(loaded.is_mature(0, self.t0 + 3600))
+
+    def test_missing_file_starts_new_game(self):
+        loaded, warning = load_state(self.path)
+        self.assertIsNone(warning)
+        self.assertEqual(loaded.coins, 60)
+        self.assertEqual(loaded.unlocked_plots, 4)
+
+    def test_corrupt_json_is_backed_up(self):
+        self.path.write_text("{not json", encoding="utf-8")
+        loaded, warning = load_state(self.path)
+        self.assertEqual(warning, "存档损坏，已开始新的一局")
+        self.assertEqual(loaded.coins, 60)
+        self.assertTrue(list(Path(self.tmp.name).glob("save.corrupt-*.json")))
+
+    def test_load_invalid_types_resets(self):
+        self.path.write_text(
+            json.dumps({"coins": "many", "unlocked_plots": 4, "plots": [None] * 8}),
+            encoding="utf-8",
+        )
+        loaded, warning = load_state(self.path)
+        self.assertEqual(warning, "存档损坏，已开始新的一局")
+        self.assertEqual(loaded.coins, 60)
+
+    def test_missing_optional_fields_use_defaults(self):
+        self.path.write_text(
+            json.dumps({"coins": 100, "unlocked_plots": 4, "plots": [None] * 8}),
+            encoding="utf-8",
+        )
+        loaded, warning = load_state(self.path)
+        self.assertIsNone(warning)
+        self.assertEqual(loaded.coins, 100)
+        self.assertEqual(loaded.warehouse, {})
+        self.assertEqual(loaded.total_harvests, 0)
+        self.assertEqual(loaded.selected_crop, "xiaobaicai")
+
+    def test_unknown_crop_is_dropped(self):
+        self.path.write_text(
+            json.dumps({
+                "coins": 100,
+                "unlocked_plots": 4,
+                "plots": [{"crop": "unknown", "planted_at": 100.0}] + [None] * 7,
+                "warehouse": {"unknown": 5, "fanqie": 2},
+            }),
+            encoding="utf-8",
+        )
+        loaded, warning = load_state(self.path)
+        self.assertIsNone(warning)
+        self.assertIsNone(loaded.plots[0])
+        self.assertEqual(loaded.warehouse, {"fanqie": 2})
