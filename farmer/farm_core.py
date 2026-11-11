@@ -50,3 +50,51 @@ class FarmState:
     total_income: int = 0
     warehouse: Dict[str, int] = field(default_factory=dict)
     plots: List[Optional[Plot]] = field(default_factory=lambda: [None] * MAX_PLOTS)
+
+    def _require_index(self, index: int) -> None:
+        if not 0 <= index < MAX_PLOTS:
+            raise ValueError("地块不存在")
+
+    def saved_seconds(self, plot: Plot) -> float:
+        return plot.water_count * CROPS[plot.crop_id].grow_seconds * WATER_RATIO
+
+    def elapsed(self, plot: Plot, now: float) -> float:
+        return max(0.0, now - plot.planted_at) + self.saved_seconds(plot)
+
+    def plant(self, index: int, crop_id: str, now: float) -> None:
+        self._require_index(index)
+        if index >= self.unlocked_plots:
+            raise ValueError("这块地还没开垦")
+        if self.plots[index] is not None:
+            raise ValueError("这块地已经有作物了")
+        crop = CROPS.get(crop_id)
+        if crop is None:
+            raise ValueError("未知作物")
+        if self.coins < crop.seed_price:
+            raise ValueError("金币不够")
+        self.coins -= crop.seed_price
+        self.plots[index] = Plot(crop_id, now)
+
+    def remaining_seconds(self, index: int, now: float) -> float:
+        self._require_index(index)
+        plot = self.plots[index]
+        if plot is None:
+            return 0.0
+        crop = CROPS.get(plot.crop_id)
+        if crop is None:
+            return 0.0
+        return max(0.0, crop.grow_seconds - self.elapsed(plot, now))
+
+    def progress(self, index: int, now: float) -> float:
+        self._require_index(index)
+        plot = self.plots[index]
+        if plot is None:
+            return 0.0
+        crop = CROPS.get(plot.crop_id)
+        if crop is None:
+            return 0.0
+        return min(1.0, self.elapsed(plot, now) / crop.grow_seconds)
+
+    def is_mature(self, index: int, now: float) -> bool:
+        self._require_index(index)
+        return self.plots[index] is not None and self.remaining_seconds(index, now) == 0.0
