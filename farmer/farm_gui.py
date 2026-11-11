@@ -47,7 +47,7 @@ def format_duration(seconds: int) -> str:
 
 class PlotCard(tk.Frame):
     WIDTH = 200
-    CANVAS_HEIGHT = 144
+    CANVAS_HEIGHT = 160
 
     def __init__(self, master, index, on_click, on_water):
         super().__init__(master, bg=CARD_BG, padx=4, pady=4)
@@ -84,7 +84,7 @@ class PlotCard(tk.Frame):
 
     def show_float(self, text):
         item = self.canvas.create_text(
-            100, 58, text=text, fill="#B5651D",
+            100, 108, text=text, fill="#B5651D",
             font=("Microsoft YaHei UI", 12, "bold"), tags=("float",),
         )
 
@@ -101,24 +101,24 @@ class PlotCard(tk.Frame):
 
         if index >= state.unlocked_plots:
             self._draw_soil(locked=True)
-            self._text(100, 88, "未开垦", color="#6E6458", size=12)
+            self._text(100, 108, "未开垦", color="#6E6458", size=12)
             self.water_button.configure(state="disabled")
             return
 
         plot = state.plots[index]
         if plot is None:
             self._draw_soil()
-            self._text(100, 78, "空地", color="#F3E4CF", size=13, bold=True)
+            self._text(100, 96, "空地", color="#F3E4CF", size=13, bold=True)
             selected = CROPS.get(state.selected_crop)
             if selected is not None:
-                self._text(100, 104, "点击种下" + selected.name, color="#F0DCC0", size=9)
+                self._text(100, 130, "点击种下" + selected.name, color="#F0DCC0", size=9)
             self.water_button.configure(state="disabled")
             return
 
         crop = CROPS.get(plot.crop_id)
         if crop is None:
             self._draw_soil()
-            self._text(100, 88, "空地", color="#F3E4CF", size=13)
+            self._text(100, 108, "空地", color="#F3E4CF", size=13)
             self.water_button.configure(state="disabled")
             return
 
@@ -131,13 +131,13 @@ class PlotCard(tk.Frame):
                 outline=HIGHLIGHT, width=3,
             )
         self._draw_plant(crop, progress, mature)
-        self._text(100, 12, crop.name, color=TEXT, size=11, bold=True)
+        self._text(100, 2, crop.name, color=TEXT, size=11, bold=True, anchor="n")
         if mature:
-            self._text(100, 32, "可收获", color="#B5651D", size=10, bold=True)
+            self._text(100, 38, "可收获", color="#B5651D", size=10, bold=True, anchor="n")
         else:
             remaining = state.remaining_seconds(index, now)
-            self._text(100, 32, "还需 " + format_remaining(remaining),
-                       color="#4A3B2A", size=9)
+            self._text(100, 38, "还需 " + format_remaining(remaining),
+                       color="#4A3B2A", size=9, anchor="n")
             self._draw_progress_bar(progress)
         self.water_button.configure(
             state="normal" if state.can_water(index, now) else "disabled"
@@ -145,14 +145,14 @@ class PlotCard(tk.Frame):
 
     def _draw_soil(self, locked: bool = False):
         color = LOCKED_SOIL if locked else SOIL
-        self.canvas.create_rectangle(4, 48, self.WIDTH - 4, 130, fill=color, outline="")
+        self.canvas.create_rectangle(4, 70, self.WIDTH - 4, 146, fill=color, outline="")
         if not locked:
-            for y in range(60, 129, 14):
+            for y in range(82, 145, 14):
                 self.canvas.create_line(10, y, self.WIDTH - 10, y,
                                         fill=SOIL_DARK, width=1)
 
     def _draw_plant(self, crop, progress: float, mature: bool):
-        base_y = 124
+        base_y = 140
         stem_height = 10 + 54 * min(1.0, progress / 0.85)
         top_y = base_y - stem_height
         self.canvas.create_line(100, base_y, 100, top_y + 4,
@@ -198,7 +198,7 @@ class PlotCard(tk.Frame):
             )
 
     def _draw_progress_bar(self, progress: float):
-        x1, y1, x2, y2 = 45, 134, 155, 140
+        x1, y1, x2, y2 = 45, 150, 155, 156
         self.canvas.create_rectangle(x1, y1, x2, y2, fill="#D8C9B0", outline="")
         if progress > 0:
             self.canvas.create_rectangle(
@@ -206,9 +206,9 @@ class PlotCard(tk.Frame):
                 fill=GREEN, outline="",
             )
 
-    def _text(self, x, y, text, color=TEXT, size=10, bold=False):
+    def _text(self, x, y, text, color=TEXT, size=10, bold=False, anchor="center"):
         font = ("Microsoft YaHei UI", size, "bold") if bold else ("Microsoft YaHei UI", size)
-        self.canvas.create_text(x, y, text=text, fill=color, font=font)
+        self.canvas.create_text(x, y, text=text, fill=color, font=font, anchor=anchor)
 
 
 class FarmApp(tk.Tk):
@@ -228,8 +228,8 @@ class FarmApp(tk.Tk):
         self._status_reset_id = None
 
         self.title("小菜园")
-        self.geometry("1260x680")
-        self.minsize(1240, 640)
+        self.geometry("1280x680")
+        self.minsize(1260, 640)
         self.configure(bg=BG)
 
         self._build_ui()
@@ -296,7 +296,7 @@ class FarmApp(tk.Tk):
         body.pack(side="top", fill="both", expand=True)
 
         self.warehouse_frame = tk.Frame(
-            body, bg=WAREHOUSE_BG, width=320, padx=12, pady=12,
+            body, bg=WAREHOUSE_BG, width=340, padx=12, pady=12,
         )
         self.warehouse_frame.pack(side="right", fill="y", padx=(12, 0))
         self.warehouse_frame.pack_propagate(False)
@@ -315,33 +315,27 @@ class FarmApp(tk.Tk):
         self.sell_buttons = {}
         for crop in CROPS.values():
             row = tk.Frame(self.warehouse_frame, bg=WAREHOUSE_BG)
-            row.pack(fill="x", pady=6)
-            row.grid_columnconfigure(0, weight=1)
-
-            tk.Label(row, text=crop.name, anchor="w", font=FONT,
-                     bg=WAREHOUSE_BG, fg=TEXT).grid(
-                row=0, column=0, sticky="w")
-
-            count_var = tk.StringVar(value="×0")
-            tk.Label(row, textvariable=count_var, width=4, anchor="w",
-                     font=FONT, bg=WAREHOUSE_BG, fg=TEXT).grid(
-                row=0, column=1, padx=(8, 4), sticky="w")
-
-            tk.Label(row, text="{}/个".format(crop.sell_price), width=7, anchor="w",
-                     font=FONT_SMALL, bg=WAREHOUSE_BG, fg=MUTED).grid(
-                row=0, column=2, padx=(0, 4), sticky="w")
-
-            subtotal_var = tk.StringVar(value="0")
-            tk.Label(row, textvariable=subtotal_var, width=5, anchor="e",
-                     font=FONT_SMALL, bg=WAREHOUSE_BG, fg=MUTED).grid(
-                row=0, column=3, padx=(0, 8), sticky="e")
+            row.pack(fill="x", pady=4)
 
             button = tk.Button(
                 row, text="卖出", font=FONT_SMALL, bd=0, relief="flat",
-                bg="#DCEBD7", activebackground="#C9DFC2", padx=8, pady=2,
+                bg="#DCEBD7", activebackground="#C9DFC2", padx=8, pady=1,
                 command=lambda crop_id=crop.crop_id: self._on_sell_click(crop_id),
             )
-            button.grid(row=0, column=4, sticky="e")
+            button.pack(side="right")
+
+            tk.Label(row, text=crop.name, anchor="w", font=FONT,
+                     bg=WAREHOUSE_BG, fg=TEXT).pack(side="left")
+            count_var = tk.StringVar(value="×0")
+            tk.Label(row, textvariable=count_var, anchor="w", font=FONT,
+                     bg=WAREHOUSE_BG, fg=TEXT).pack(side="left", padx=(6, 0))
+            tk.Label(row, text="{}/个".format(crop.sell_price), anchor="w",
+                     font=FONT_SMALL, bg=WAREHOUSE_BG, fg=MUTED).pack(
+                side="left", padx=(6, 0))
+            subtotal_var = tk.StringVar(value="0")
+            tk.Label(row, textvariable=subtotal_var, anchor="e",
+                     font=FONT_SMALL, bg=WAREHOUSE_BG, fg=MUTED).pack(
+                side="left", padx=(6, 0))
 
             self.warehouse_vars[crop.crop_id] = count_var
             self.warehouse_subtotal_vars[crop.crop_id] = subtotal_var

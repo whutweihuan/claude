@@ -727,7 +727,7 @@ class GuiSkeletonTests(unittest.TestCase):
 
 - [ ] **步骤 3：实现窗口骨架与菜地卡片**
 
-- `FarmApp.__init__`：设置标题“小菜园”、几何尺寸 `1260x680`；用 `load_state` 读取存档，警告文案稍后显示；构建顶栏占位、8 个 `PlotCard`（4 列 2 行）、种子栏占位、状态栏、右侧仓库面板占位；最后调用 `refresh()`。
+- `FarmApp.__init__`：设置标题“小菜园”、几何尺寸 `1280x680`；用 `load_state` 读取存档，警告文案稍后显示；构建顶栏占位、8 个 `PlotCard`（4 列 2 行）、种子栏占位、状态栏、右侧仓库面板占位；最后调用 `refresh()`。
 - `start_loops=True` 时启动 `after(1000, ...)` 刷新循环和 `after(10000, ...)` 自动保存循环；`False` 时不启动，供测试使用。
 - `PlotCard`：继承 `tk.Frame`，内部一个 `tk.Canvas`（约 200×120）和一个“浇水” `tk.Button`；Canvas 绑定 `<Button-1>` 调用 `on_click(index)`；按钮调用 `on_water(index)`。
 - `PlotCard.render`：清空 Canvas 后按状态绘制：

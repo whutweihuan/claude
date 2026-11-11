@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import subprocess
+import sys
 import tempfile
 import tkinter as tk
 import tkinter.font as tkfont
@@ -8,6 +10,15 @@ from unittest import mock
 
 import farm_gui
 from farm_core import CROPS, FarmState, save_state
+
+
+def _label_widgets(widget):
+    result = []
+    for child in widget.winfo_children():
+        if child.winfo_class() == "Label":
+            result.append(child)
+        result.extend(_label_widgets(child))
+    return result
 
 
 class GuiSkeletonTests(unittest.TestCase):
@@ -281,24 +292,102 @@ class GuiLayoutTests(unittest.TestCase):
             )
 
     def test_warehouse_labels_fit_their_text(self):
-        for crop_id, button in self.app.sell_buttons.items():
-            row = button.master
-            for child in row.winfo_children():
-                if child.winfo_class() != "Label":
-                    continue
-                text = child.cget("text")
-                if not text:
-                    continue
-                font = tkfont.Font(font=child.cget("font"))
-                self.assertLessEqual(
-                    font.measure(text),
-                    child.winfo_width(),
-                    "{} 的仓库文字 {!r} 需要 {}px，但标签只有 {}px".format(
-                        crop_id, text, font.measure(text), child.winfo_width()
-                    ),
-                )
+        for label in _label_widgets(self.app.warehouse_frame):
+            text = label.cget("text")
+            if not text:
+                continue
+            font = tkfont.Font(font=label.cget("font"))
+            self.assertLessEqual(
+                font.measure(text),
+                label.winfo_width(),
+                "仓库文字 {!r} 需要 {}px，但标签只有 {}px".format(
+                    text, font.measure(text), label.winfo_width()
+                ),
+            )
         font = tkfont.Font(font=self.app.sell_all_button.cget("font"))
         self.assertLessEqual(
             font.measure(self.app.sell_all_button.cget("text")),
             self.app.sell_all_button.winfo_width(),
         )
+
+    @unittest.skipUnless(sys.platform == "win32", "系统 DPI 布局测试仅限 Windows")
+    def test_layout_fits_with_real_dpi_awareness(self):
+        script = r'''
+import sys, tempfile
+from pathlib import Path
+import tkinter.font as tkfont
+import farm_gui
+
+sys.stdout.reconfigure(encoding="utf-8")
+farm_gui._enable_dpi_awareness()
+app = farm_gui.FarmApp(
+    save_path=Path(tempfile.mkdtemp()) / "save.json",
+    start_loops=False,
+)
+app.state.coins = 1000
+app.state.plant(0, "nangua", app.clock())
+app.state.plant(1, "xiaobaicai", app.clock() - 1800)
+app.refresh()
+app.update_idletasks()
+app.update()
+problems = []
+
+if app.winfo_reqwidth() > app.winfo_width():
+    problems.append("window req %d > width %d" % (app.winfo_reqwidth(), app.winfo_width()))
+
+card = app.plot_cards[3]
+if card.winfo_x() + card.winfo_width() > app.farm_frame.winfo_width():
+    problems.append("card 4 clipped")
+
+def labels(widget):
+    for child in widget.winfo_children():
+        if child.winfo_class() == "Label":
+            yield child
+        for sub in labels(child):
+            yield sub
+
+for label in labels(app.warehouse_frame):
+    text = label.cget("text")
+    if not text:
+        continue
+    need = tkfont.Font(font=label.cget("font")).measure(text)
+    if need > label.winfo_width():
+        problems.append("label %r needs %d > %d" % (text, need, label.winfo_width()))
+
+for crop_id, button in app.sell_buttons.items():
+    if button.winfo_x() + button.winfo_width() > button.master.winfo_width():
+        problems.append("sell button %s overflows row" % crop_id)
+
+for crop_id, button in app.seed_buttons.items():
+    need = tkfont.Font(font=button.cget("font")).measure(button.cget("text"))
+    if need > button.winfo_width():
+        problems.append("seed button %s needs %d > %d" % (crop_id, need, button.winfo_width()))
+
+for card in app.plot_cards:
+    width = card.canvas.winfo_width()
+    height = card.canvas.winfo_height()
+    for item in card.canvas.find_all():
+        if card.canvas.type(item) != "text":
+            continue
+        bbox = card.canvas.bbox(item)
+        if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > width or bbox[3] > height:
+            problems.append(
+                "canvas text %r bbox %r outside %dx%d"
+                % (card.canvas.itemcget(item, "text"), bbox, width, height)
+            )
+
+app.destroy()
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+'''
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            cwd=str(Path(__file__).resolve().parent),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
