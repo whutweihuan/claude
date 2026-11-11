@@ -72,6 +72,15 @@ test('全押金币不足时只加到能负担为止', () => {
   assert.strictEqual(g.getState().totalBet, 25);
 });
 
+test('全押跳过已满 99 的门，不提前停止', () => {
+  const g = E.createGame({ coins: 1000 });
+  g.bet('s_banana', 99);
+  const r = g.betAll(1);
+  assert.deepStrictEqual(r, { ok: true, added: 8 });
+  assert.strictEqual(g.getState().totalBet, 107);
+  assert.strictEqual(g.getState().bets.s_banana, 99);
+});
+
 test('getState 返回快照', () => {
   const g = E.createGame();
   const s = g.getState();
@@ -249,24 +258,116 @@ test('达到 99999 触发爆机标记', () => {
   assert.strictEqual(g.getState().jackpotArmed, false);
 });
 
-test('10 万局九门均注：RTP 在 0.85–1.05', () => {
+test('非整数/零步进与非法图案被拒绝', () => {
+  const g = E.createGame();
+  assert.deepStrictEqual(g.bet('apple', 0), { ok: false, error: 'INVALID_DELTA' });
+  assert.deepStrictEqual(g.bet('apple', 1.5), { ok: false, error: 'INVALID_DELTA' });
+  assert.deepStrictEqual(g.bet('nope', 1), { ok: false, error: 'INVALID_SYMBOL' });
+  assert.deepStrictEqual(g.betAll(0), { ok: false, error: 'INVALID_DELTA' });
+});
+
+test('重复收分只入账一次', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  g.spin();
+  assert.strictEqual(g.collect().collected, 120);
+  const coins = g.getState().coins;
+  assert.deepStrictEqual(g.collect(), { collected: 0, jackpot: false });
+  assert.strictEqual(g.getState().coins, coins);
+});
+
+test('爆机后跌破 90000 重新武装，可再次触发', () => {
+  const g = E.createGame({ coins: 99999, rng: () => 0 });
+  g.bet('bar', 1);
+  g.forceNextSymbol('bar');
+  g.spin();
+  assert.strictEqual(g.collect().jackpot, true);
+  assert.strictEqual(g.getState().jackpotArmed, false);
+
+  for (let i = 0; i < 12; i++) {
+    g.betAll(99);
+    g.forceNextLuck();
+    g.spin();
+    g.collect();
+  }
+  assert.ok(g.getState().coins < 90000, `coins=${g.getState().coins}`);
+
+  g.clearBets();
+  g.bet('bar', 1);
+  g.forceNextSymbol('bar');
+  g.spin();
+  assert.strictEqual(g.collect().jackpot, false);
+  assert.strictEqual(g.getState().jackpotArmed, true);
+
+  g.insertCoin(99999 - g.getState().coins);
+  g.clearBets();
+  g.bet('bar', 1);
+  g.forceNextSymbol('bar');
+  g.spin();
+  assert.strictEqual(g.collect().jackpot, true);
+});
+
+test('10 万局九门均注：RTP 与彩头分布', () => {
   const g = E.createGame({ coins: 1e9, rng: E.mulberry32(20261111) });
   for (const s of E.SYMBOLS) g.bet(s.id, 1);
-  let wagered = 0, won = 0, features = 0, trainCount = 0, trainSpins = 0;
+
+  let wagered = 0, won = 0;
+  let features = 0, trainSpins = 0, trainCars = 0, trainEmpty = 0, gateCount = 0;
+  const types = { smallThree: 0, bigThree: 0, train: 0, gate: 0 };
+  const gateLabels = { 小天门: 0, 天门: 0, 大天门: 0 };
+
   for (let i = 0; i < 100000; i++) {
     const r = g.spin();
     wagered += 9;
     won += r.win;
     if (r.kind === 'feature') {
       features++;
-      if (r.feature.type === 'train') { trainSpins++; trainCount += r.feature.carriages.length; }
+      types[r.feature.type]++;
+      if (r.feature.type === 'train') {
+        trainSpins++;
+        for (const carriage of r.feature.carriages) {
+          trainCars++;
+          if (carriage.empty) trainEmpty++;
+        }
+      }
+      if (r.feature.type === 'gate') {
+        gateCount++;
+        gateLabels[r.feature.wheel.label]++;
+      }
     }
     g.collect();
   }
+
   const rtp = won / wagered;
-  assert.ok(rtp >= 0.85 && rtp <= 1.05, `RTP=${rtp}`);
+  assert.ok(rtp >= 0.93 && rtp <= 0.99, `RTP=${rtp}`);
   assert.ok(features / 100000 >= 0.015 && features / 100000 <= 0.055, `feature rate=${features / 100000}`);
-  assert.strictEqual(trainCount, trainSpins * 5);
+  assert.strictEqual(types.smallThree + types.bigThree + types.train + types.gate, features);
+
+  assert.ok(types.smallThree / 100000 >= 0.012 && types.smallThree / 100000 <= 0.017, `smallThree=${types.smallThree}`);
+  assert.ok(types.bigThree / 100000 >= 0.004 && types.bigThree / 100000 <= 0.008, `bigThree=${types.bigThree}`);
+  assert.ok(types.train / 100000 >= 0.0085 && types.train / 100000 <= 0.013, `train=${types.train}`);
+  assert.ok(types.gate / 100000 >= 0.0028 && types.gate / 100000 <= 0.0066, `gate=${types.gate}`);
+
+  assert.strictEqual(trainCars, trainSpins * 5);
+  assert.ok(
+    trainEmpty / trainCars >= 0.324 && trainEmpty / trainCars <= 0.364,
+    `train empty=${trainEmpty / trainCars}`
+  );
+
+  assert.strictEqual(gateLabels.小天门 + gateLabels.天门 + gateLabels.大天门, gateCount);
+  assert.ok(
+    gateLabels.小天门 / gateCount >= 0.58 && gateLabels.小天门 / gateCount <= 0.72,
+    `gate 小天门=${gateLabels.小天门 / gateCount}`
+  );
+  assert.ok(
+    gateLabels.天门 / gateCount >= 0.23 && gateLabels.天门 / gateCount <= 0.37,
+    `gate 天门=${gateLabels.天门 / gateCount}`
+  );
+  assert.ok(
+    gateLabels.大天门 / gateCount >= 0.02 && gateLabels.大天门 / gateCount <= 0.10,
+    `gate 大天门=${gateLabels.大天门 / gateCount}`
+  );
 });
 
 summary();

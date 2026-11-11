@@ -157,8 +157,9 @@
 
     setLed(els.coins, state.coins);
     setLed(els.bet, state.totalBet);
-    setLed(els.win, state.pendingWin);
-    els.feature.textContent = `${state.spinsSinceFeature}/60`;
+    // 跑灯 / 彩头动画期间不提前泄露本局奖金和彩头进度。
+    setLed(els.win, ui.animating ? 0 : state.pendingWin);
+    if (!ui.animating) els.feature.textContent = `${state.spinsSinceFeature}/60`;
 
     for (const sym of TigerEngine.SYMBOLS) {
       const row = els.betList.querySelector(`.bet-row[data-id="${sym.id}"]`);
@@ -242,7 +243,7 @@
       return;
     }
     TigerAudio.click();
-    showStatus(result.added > 0 ? `全押 ${result.added} 分` : '金币不足');
+    showStatus(result.added > 0 ? `全押 ${result.added} 分` : '没有可加注的图案或金币不足');
     syncUI();
   }
 

@@ -155,6 +155,7 @@
 
       let added = 0;
       for (const sym of SYMBOLS) {
+        if (bets[sym.id] >= MAX_BET) continue;
         const room = Math.min(unit, MAX_BET - bets[sym.id], coins - totalBet());
         if (room <= 0) break;
         bets[sym.id] += room;
