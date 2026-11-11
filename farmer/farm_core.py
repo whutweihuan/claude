@@ -98,3 +98,30 @@ class FarmState:
     def is_mature(self, index: int, now: float) -> bool:
         self._require_index(index)
         return self.plots[index] is not None and self.remaining_seconds(index, now) == 0.0
+
+    def can_water(self, index: int, now: float) -> bool:
+        self._require_index(index)
+        plot = self.plots[index]
+        if plot is None:
+            return False
+        if self.remaining_seconds(index, now) == 0.0:
+            return False
+        if plot.water_count >= WATER_MAX:
+            return False
+        if now - plot.last_water_at < WATER_COOLDOWN:
+            return False
+        return True
+
+    def water(self, index: int, now: float) -> None:
+        self._require_index(index)
+        plot = self.plots[index]
+        if plot is None:
+            raise ValueError("这块地没有作物")
+        if self.remaining_seconds(index, now) == 0.0:
+            raise ValueError("作物已经成熟")
+        if plot.water_count >= WATER_MAX:
+            raise ValueError("已经浇过 3 次水了")
+        if now - plot.last_water_at < WATER_COOLDOWN:
+            raise ValueError("浇水冷却中")
+        plot.water_count += 1
+        plot.last_water_at = now

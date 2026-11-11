@@ -80,3 +80,46 @@ class PlantAndGrowthTests(unittest.TestCase):
         self.state.plant(0, "xiaobaicai", self.t0)
         self.assertEqual(self.state.progress(0, self.t0 - 3600), 0.0)
         self.assertAlmostEqual(self.state.remaining_seconds(0, self.t0 - 3600), 1800)
+
+
+class WateringTests(unittest.TestCase):
+    def setUp(self):
+        self.state = FarmState()
+        self.state.coins = 1000
+        self.t0 = 1_700_000_000.0
+        self.state.plant(0, "xiaobaicai", self.t0)   # 1800 秒
+
+    def test_water_reduces_remaining_by_ten_percent_of_total(self):
+        self.state.water(0, self.t0 + 60)
+        self.assertAlmostEqual(
+            self.state.remaining_seconds(0, self.t0 + 60), 1800 - 60 - 180
+        )
+        self.assertEqual(self.state.plots[0].water_count, 1)
+
+    def test_water_has_ten_minute_cooldown(self):
+        self.state.water(0, self.t0 + 60)
+        with self.assertRaisesRegex(ValueError, "冷却"):
+            self.state.water(0, self.t0 + 659)
+        self.state.water(0, self.t0 + 660)  # 冷却刚好结束
+
+    def test_water_limited_to_three_times(self):
+        long_state = FarmState(coins=1000)
+        long_state.plant(0, "nangua", self.t0)
+        for offset in (0, 600, 1200):
+            long_state.water(0, self.t0 + offset)
+        with self.assertRaisesRegex(ValueError, "3 次"):
+            long_state.water(0, self.t0 + 1800)
+
+    def test_water_rejects_empty_plot(self):
+        with self.assertRaisesRegex(ValueError, "没有作物"):
+            self.state.water(3, self.t0)
+
+    def test_water_rejects_mature_crop(self):
+        with self.assertRaisesRegex(ValueError, "已经成熟"):
+            self.state.water(0, self.t0 + 1800)
+
+    def test_can_water_reflects_cooldown(self):
+        self.assertTrue(self.state.can_water(0, self.t0))
+        self.state.water(0, self.t0)
+        self.assertFalse(self.state.can_water(0, self.t0 + 599))
+        self.assertTrue(self.state.can_water(0, self.t0 + 600))
