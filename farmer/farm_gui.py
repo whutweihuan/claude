@@ -228,6 +228,7 @@ class FarmApp(tk.Tk):
         self.land_button = tk.Button(
             self.header, text="开垦", font=FONT, bd=0, relief="flat",
             bg="#D9C7A7", activebackground="#CDB891", padx=14, pady=3,
+            command=self._on_buy_land_click,
         )
         self.land_button.pack(side="right")
 
@@ -256,6 +257,13 @@ class FarmApp(tk.Tk):
             button.pack(side="left", padx=3)
             self.seed_buttons[crop.crop_id] = button
 
+        self.harvest_all_button = tk.Button(
+            self.seed_frame, text="一键收获", font=FONT, bd=0, relief="flat",
+            bg="#D9C7A7", activebackground="#CDB891", padx=12, pady=3,
+            command=self._on_harvest_all_click,
+        )
+        self.harvest_all_button.pack(side="right")
+
         body = tk.Frame(self, bg=BG, padx=12, pady=12)
         body.pack(side="top", fill="both", expand=True)
 
@@ -265,7 +273,40 @@ class FarmApp(tk.Tk):
         self.warehouse_frame.pack(side="right", fill="y", padx=(12, 0))
         self.warehouse_frame.pack_propagate(False)
         tk.Label(self.warehouse_frame, text="仓库", font=FONT_TITLE,
-                 bg=WAREHOUSE_BG, fg=TEXT).pack(anchor="w", pady=(0, 8))
+                 bg=WAREHOUSE_BG, fg=TEXT).pack(anchor="w", pady=(0, 6))
+
+        self.sell_all_button = tk.Button(
+            self.warehouse_frame, text="全部卖出（0 金币）", font=FONT,
+            bd=0, relief="flat", bg="#D9C7A7", activebackground="#CDB891",
+            padx=8, pady=4, command=self._on_sell_all_click,
+        )
+        self.sell_all_button.pack(side="bottom", fill="x", pady=(12, 0))
+
+        self.warehouse_vars = {}
+        self.warehouse_subtotal_vars = {}
+        self.sell_buttons = {}
+        for crop in CROPS.values():
+            row = tk.Frame(self.warehouse_frame, bg=WAREHOUSE_BG)
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=crop.name, width=4, anchor="w",
+                     font=FONT, bg=WAREHOUSE_BG, fg=TEXT).pack(side="left")
+            count_var = tk.StringVar(value="×0")
+            tk.Label(row, textvariable=count_var, width=3, anchor="w",
+                     font=FONT, bg=WAREHOUSE_BG, fg=TEXT).pack(side="left")
+            tk.Label(row, text="{}/个".format(crop.sell_price), width=6, anchor="w",
+                     font=FONT_SMALL, bg=WAREHOUSE_BG, fg=MUTED).pack(side="left")
+            subtotal_var = tk.StringVar(value="0")
+            tk.Label(row, textvariable=subtotal_var, width=4, anchor="e",
+                     font=FONT_SMALL, bg=WAREHOUSE_BG, fg=MUTED).pack(side="left")
+            button = tk.Button(
+                row, text="卖出", font=FONT_SMALL, bd=0, relief="flat",
+                bg="#DCEBD7", activebackground="#C9DFC2", padx=4, pady=1,
+                command=lambda crop_id=crop.crop_id: self._on_sell_click(crop_id),
+            )
+            button.pack(side="right")
+            self.warehouse_vars[crop.crop_id] = count_var
+            self.warehouse_subtotal_vars[crop.crop_id] = subtotal_var
+            self.sell_buttons[crop.crop_id] = button
 
         self.farm_frame = tk.Frame(body, bg=BG)
         self.farm_frame.pack(side="left", fill="both", expand=True)
@@ -283,6 +324,8 @@ class FarmApp(tk.Tk):
             card.render(self.state, index, now)
         self._update_header()
         self._update_seed_buttons()
+        self._update_warehouse()
+        self._update_harvest_all_button(now)
         self._update_title(now)
         return now
 
@@ -312,6 +355,31 @@ class FarmApp(tk.Tk):
                 bg="#CDE0C7" if affordable else "#DDD4C4",
                 fg=TEXT if affordable else "#9A8F7F",
             )
+
+    def _update_warehouse(self):
+        total = 0
+        for crop_id, count_var in self.warehouse_vars.items():
+            crop = CROPS[crop_id]
+            count = self.state.warehouse.get(crop_id, 0)
+            subtotal = count * crop.sell_price
+            count_var.set("×{}".format(count))
+            self.warehouse_subtotal_vars[crop_id].set(str(subtotal))
+            button = self.sell_buttons[crop_id]
+            if count > 0:
+                button.configure(state="normal", bg="#DCEBD7", fg=TEXT)
+            else:
+                button.configure(state="disabled", bg="#E7E0D3", fg="#B0A897")
+            total += subtotal
+        self.sell_all_button.configure(
+            text="全部卖出（{} 金币）".format(total),
+            state="normal" if total > 0 else "disabled",
+        )
+
+    def _update_harvest_all_button(self, now):
+        ripe = any(
+            self.state.is_mature(index, now) for index in range(MAX_PLOTS)
+        )
+        self.harvest_all_button.configure(state="normal" if ripe else "disabled")
 
     def set_status(self, text, seconds=3):
         self.status_var.set(text)
@@ -379,6 +447,46 @@ class FarmApp(tk.Tk):
             self.set_status(str(exc))
             return
         self.set_status("浇水成功，生长加快")
+        self._save()
+        self.refresh()
+
+    def _on_harvest_all_click(self):
+        count = self.state.harvest_all(self.clock())
+        if count:
+            self.set_status("收获了 {} 份作物".format(count))
+        else:
+            self.set_status("没有可收获的作物")
+        self._save()
+        self.refresh()
+
+    def _on_sell_click(self, crop_id):
+        crop = CROPS.get(crop_id)
+        if crop is None:
+            return
+        amount = self.state.sell(crop_id)
+        if amount:
+            self.set_status("卖出{}，+{} 金币".format(crop.name, amount))
+        else:
+            self.set_status("仓库里没有{}".format(crop.name))
+        self._save()
+        self.refresh()
+
+    def _on_sell_all_click(self):
+        amount = self.state.sell_all()
+        if amount:
+            self.set_status("全部卖出，+{} 金币".format(amount))
+        else:
+            self.set_status("仓库是空的")
+        self._save()
+        self.refresh()
+
+    def _on_buy_land_click(self):
+        try:
+            unlocked = self.state.buy_land()
+        except ValueError as exc:
+            self.set_status(str(exc))
+            return
+        self.set_status("已开垦第 {} 块地".format(unlocked))
         self._save()
         self.refresh()
 
