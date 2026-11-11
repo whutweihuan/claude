@@ -8,6 +8,7 @@ import time
 import unittest
 import urllib.parse
 from pathlib import Path
+from unittest import mock
 
 from share_server import ShareServer
 
@@ -48,6 +49,18 @@ class ServerTestCase(unittest.TestCase):
             raw = resp.getheader("Set-Cookie") or ""
             self.cookie = raw.split(";")[0]
         return resp, body
+
+    def login_cookie(self, port, pin="1234"):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request(
+            "POST", "/api/login", json.dumps({"pin": pin}).encode("utf-8"),
+            {"Content-Type": "application/json", "X-Requested-With": "shareFile"},
+        )
+        resp = conn.getresponse()
+        cookie = (resp.getheader("Set-Cookie") or "").split(";")[0]
+        resp.read()
+        conn.close()
+        return cookie
 
 
 class AuthTests(ServerTestCase):
@@ -302,6 +315,88 @@ class UploadTests(ServerTestCase):
         self.assertEqual(resp.status, 201)
         self.assertTrue((new_root / "moved.txt").exists())
         self.assertFalse((self.root / "moved.txt").exists())
+
+    def test_temp_dir_is_kept_after_successful_upload(self):
+        resp, _ = self.upload("one.txt", b"x")
+        self.assertEqual(resp.status, 201)
+        self.assertTrue((self.root / ".sharefile-tmp").is_dir())
+
+    def test_upload_name_colliding_with_directory_gets_suffix(self):
+        (self.root / "photos").mkdir()
+        resp, body = self.upload("photos", b"x")
+        self.assertEqual(resp.status, 201)
+        self.assertEqual(json.loads(body)["name"], "photos (1)")
+        self.assertEqual((self.root / "photos (1)").read_bytes(), b"x")
+
+    def test_many_concurrent_uploads_leave_no_temp_files(self):
+        errors = []
+
+        def worker(worker_id):
+            for index in range(20):
+                name = "stress-%d-%d.txt" % (worker_id, index)
+                try:
+                    resp, body = self.upload(name, b"x" * 1024)
+                    if resp.status != 201:
+                        errors.append((name, resp.status, body[:80]))
+                except Exception as exc:
+                    errors.append((name, repr(exc)))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(list(self.root.glob("stress-*.txt"))), 160)
+        leftovers = list((self.root / ".sharefile-tmp").glob("*.part"))
+        self.assertEqual(leftovers, [])
+
+    def test_stalled_upload_times_out_and_cleans_temp(self):
+        with mock.patch("share_server.CLIENT_TIMEOUT", 0.2):
+            server = ShareServer(self.root, port=0, pin="1234")
+            server.start()
+            try:
+                port = server.port
+                cookie = self.login_cookie(port)
+                sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+                raw = (
+                    "PUT /api/upload?name=stalled.bin HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Cookie: %s\r\n"
+                    "X-Requested-With: shareFile\r\n"
+                    "Content-Length: 1048576\r\n\r\n" % cookie
+                ).encode("ascii")
+                sock.sendall(raw + b"x" * 100)
+
+                temp_dir = self.root / ".sharefile-tmp"
+                deadline = time.time() + 2
+                while time.time() < deadline and not list(temp_dir.glob("*.part")):
+                    time.sleep(0.02)
+                self.assertTrue(list(temp_dir.glob("*.part")), "upload did not start")
+
+                time.sleep(0.6)
+                self.assertEqual(list(temp_dir.glob("*.part")), [])
+                self.assertFalse((self.root / "stalled.bin").exists())
+                sock.close()
+            finally:
+                server.stop()
+
+
+class UnavailableDirTests(ServerTestCase):
+    def test_unavailable_shared_dir_blocks_all_file_operations(self):
+        self.login()
+        self.server.state.set_usable(False)
+        resp, _ = self.request("GET", "/api/files")
+        self.assertEqual(resp.status, 503)
+        (self.root / "a.txt").write_text("x", encoding="utf-8")
+        resp, _ = self.request("GET", "/download?path=a.txt")
+        self.assertEqual(resp.status, 503)
+        resp, _ = self.request(
+            "PUT", "/api/upload?name=a.txt", b"x",
+            {"X-Requested-With": "shareFile"},
+        )
+        self.assertEqual(resp.status, 503)
 
 
 class WebAssetTests(ServerTestCase):

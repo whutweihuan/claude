@@ -24,11 +24,25 @@ class ConfigTests(unittest.TestCase):
             ["192.168.1.5", "10.0.0.2", "8.8.8.8"],
         )
 
-    def test_writable_detection_uses_os_access(self):
-        from unittest import mock
+    def test_writable_probe_and_directory_state(self):
         import share_app
-        with mock.patch("share_app.os.access", return_value=False):
-            self.assertFalse(share_app.is_writable(Path(".")))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertTrue(share_app.is_writable(root))
+            self.assertEqual(share_app.directory_state(root), "ok")
+
+            file_path = root / "f.txt"
+            file_path.write_text("x", encoding="utf-8")
+            self.assertFalse(share_app.is_writable(file_path))
+            self.assertEqual(share_app.directory_state(file_path), "unavailable")
+
+    def test_address_hint_for_loopback_only(self):
+        import share_app
+        self.assertEqual(
+            share_app.address_hint(["127.0.0.1"]),
+            "未检测到局域网地址，仅本机可访问",
+        )
+        self.assertEqual(share_app.address_hint(["192.168.1.5"]), "")
 
 
 class GuiSmokeTests(unittest.TestCase):

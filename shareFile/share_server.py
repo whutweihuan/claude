@@ -29,6 +29,7 @@ WEB_ASSETS = ("index.html", "app.js", "style.css")
 DOWNLOAD_BLOCK = 4 * 1024 * 1024
 UPLOAD_BLOCK = 1024 * 1024
 PROGRESS_INTERVAL = 0.25
+CLIENT_TIMEOUT = 60
 
 
 class ShortUpload(Exception):
@@ -58,6 +59,28 @@ def load_web_assets():
     return assets
 
 
+def cleanup_stale_temp(root):
+    """服务启动时清理上次遗留的上传临时文件；目录本身保留。"""
+    temp_dir = Path(root) / ".sharefile-tmp"
+    try:
+        entries = list(temp_dir.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if entry.name.endswith(".part"):
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+
+
+def _path_exists(path):
+    try:
+        return os.path.lexists(str(path))
+    except OSError:
+        return True
+
+
 class ShareState(object):
     """线程安全的共享状态：目录、口令、会话、限流与传输事件。"""
 
@@ -68,6 +91,7 @@ class ShareState(object):
         self._sessions = set()
         self._failures = {}
         self._read_only = bool(read_only)
+        self._usable = True
         self.events = events if events is not None else queue.Queue(maxsize=1000)
         self._listing_cache = None
         self._listing_root = None
@@ -92,6 +116,14 @@ class ShareState(object):
     def set_read_only(self, read_only):
         with self._lock:
             self._read_only = bool(read_only)
+
+    def set_usable(self, usable):
+        with self._lock:
+            self._usable = bool(usable)
+
+    def is_usable(self):
+        with self._lock:
+            return self._usable
 
     def regenerate_pin(self):
         with self._lock:
@@ -136,7 +168,7 @@ class ShareState(object):
 
     def can_write(self):
         with self._lock:
-            return not self._read_only
+            return self._usable and not self._read_only
 
     def emit(self, **event):
         try:
@@ -223,6 +255,7 @@ class ShareServer(object):
                 if self._requested_port + offset <= 65535
             ]
 
+        cleanup_stale_temp(self._state.shared_dir)
         assets = load_web_assets()
         last_error = None
         for port in candidates:
@@ -275,6 +308,10 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
         BaseHTTPRequestHandler.setup(self)
         try:
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        try:
+            self.connection.settimeout(CLIENT_TIMEOUT)
         except OSError:
             pass
 
@@ -463,6 +500,9 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
     def _handle_files(self):
         if not self._require_auth():
             return
+        if not self.state.is_usable():
+            self._json(503, {"error": "shared_dir_unavailable"})
+            return
         self._json(
             200,
             {"files": self.state.list_files(), "read_only": not self.state.can_write()},
@@ -470,6 +510,9 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_download(self, head_only):
         if not self._require_auth():
+            return
+        if not self.state.is_usable():
+            self._json(503, {"error": "shared_dir_unavailable"})
             return
 
         query = parse_qs(urlparse(self.path).query)
@@ -599,6 +642,10 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        if not self.state.is_usable():
+            self._reject(503, {"error": "shared_dir_unavailable"})
+            return
+
         if self.headers.get(CSRF_HEADER) != CSRF_VALUE:
             self._reject(403, {"error": "forbidden"})
             return
@@ -660,12 +707,20 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             self.state.emit(kind="upload", phase="error", name=name)
             self._reject(400, {"error": "short_body"})
             return
+        except socket.timeout:
+            self.state.emit(kind="upload", phase="error", name=name)
+            self.close_connection = True
+            return
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             self.state.emit(kind="upload", phase="error", name=name)
             self.close_connection = True
             return
         except OSError as exc:
             self.state.emit(kind="upload", phase="error", name=name)
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                self.state.set_read_only(True)
+                self._reject(403, {"error": "read_only"})
+                return
             status = 507 if exc.errno == errno.ENOSPC else 500
             self._reject(
                 status, {"error": "disk_full" if status == 507 else "write_failed"}
@@ -677,13 +732,8 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
                     handle.close()
                 except OSError:
                     pass
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except OSError:
-                    pass
             try:
-                temp_dir.rmdir()
+                os.unlink(str(temp_path))
             except OSError:
                 pass
 
@@ -701,12 +751,20 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
     def _finalize_upload(self, root, name, temp_path):
         for index in range(10000):
             candidate = root / core.numbered_name(name, index)
+            if _path_exists(candidate):
+                continue
             try:
                 fd = os.open(
                     str(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666
                 )
             except FileExistsError:
                 continue
+            except OSError:
+                # Windows 上候选路径是目录时会抛 PermissionError 而不是
+                # FileExistsError；再确认一次是否只是重名。
+                if _path_exists(candidate):
+                    continue
+                raise
 
             os.close(fd)
             try:

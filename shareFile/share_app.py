@@ -2,6 +2,7 @@
 
 import json
 import os
+import secrets
 import socket
 import sys
 import tkinter as tk
@@ -146,8 +147,46 @@ def get_lan_addresses():
     return choose_addresses(candidates)
 
 
+LOOPBACK_HINT = "未检测到局域网地址，仅本机可访问"
+
+
+def address_hint(addresses):
+    return LOOPBACK_HINT if list(addresses) == ["127.0.0.1"] else ""
+
+
 def is_writable(path):
-    return os.access(str(path), os.W_OK)
+    path = Path(path)
+    try:
+        if not path.is_dir():
+            return False
+    except OSError:
+        return False
+
+    probe_dir = path / ".sharefile-tmp"
+    probe = probe_dir / ("probe-%s.tmp" % secrets.token_hex(4))
+    try:
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        with open(str(probe), "wb") as handle:
+            handle.write(b"x")
+        os.unlink(str(probe))
+        return True
+    except OSError:
+        try:
+            os.unlink(str(probe))
+        except OSError:
+            pass
+        return False
+
+
+def directory_state(path):
+    path = Path(path)
+    try:
+        if not path.is_dir():
+            return "unavailable"
+        os.listdir(str(path))
+    except OSError:
+        return "unavailable"
+    return "ok" if is_writable(path) else "read_only"
 
 
 class ShareApp(tk.Tk):
@@ -170,6 +209,7 @@ class ShareApp(tk.Tk):
         self.title("局域网文件共享")
         self.path_var = tk.StringVar()
         self.address_var = tk.StringVar()
+        self.address_hint_var = tk.StringVar()
         self.pin_var = tk.StringVar()
         self.status_var = tk.StringVar(value="正在启动…")
         self._build_ui()
@@ -189,6 +229,7 @@ class ShareApp(tk.Tk):
             self.shared_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+        self.dir_state = directory_state(self.shared_dir)
 
     def _start_server(self):
         import queue
@@ -199,9 +240,10 @@ class ShareApp(tk.Tk):
                 self.shared_dir,
                 port=self.listen_port,
                 events=self.events,
-                read_only=not is_writable(self.shared_dir),
+                read_only=(self.dir_state == "read_only"),
             )
             server.start()
+            server.state.set_usable(self.dir_state != "unavailable")
         except OSError as exc:
             self.server = None
             self.status_var.set("启动失败：%s" % exc)
@@ -209,7 +251,7 @@ class ShareApp(tk.Tk):
             return
 
         self.server = server
-        self.status_var.set("运行中 · 端口 %d" % server.port)
+        self._update_status()
 
     def _refresh_path_label(self):
         text = str(self.shared_dir)
@@ -220,6 +262,7 @@ class ShareApp(tk.Tk):
     def _refresh_addresses(self):
         if self.server is None:
             self.address_var.set("未启动")
+            self.address_hint_var.set("")
             self.address_combo["values"] = []
             return
         addresses = get_lan_addresses()
@@ -230,6 +273,7 @@ class ShareApp(tk.Tk):
         current = self.address_var.get()
         if current not in values:
             self.address_var.set(values[0])
+        self.address_hint_var.set(address_hint(addresses))
         self.draw_qr(self.address_var.get())
 
     def _refresh_pin(self):
@@ -242,10 +286,15 @@ class ShareApp(tk.Tk):
     def _update_status(self):
         if self.server is None:
             return
-        if not self.server.state.can_write():
+        if not self.server.state.is_usable():
+            self.status_var.set("共享目录不可用 · 端口 %d" % self.server.port)
+            self.status_label.configure(foreground="#aa0000")
+        elif not self.server.state.can_write():
             self.status_var.set("运行中 · 端口 %d · 只读" % self.server.port)
+            self.status_label.configure(foreground="#b26a00")
         else:
             self.status_var.set("运行中 · 端口 %d" % self.server.port)
+            self.status_label.configure(foreground="#1a6b2f")
 
     # ---- 界面 ----
 
@@ -273,6 +322,12 @@ class ShareApp(tk.Tk):
         ttk.Button(top, text="复制", command=self.copy_address).grid(
             row=1, column=2, pady=(8, 0)
         )
+        ttk.Label(
+            top,
+            textvariable=self.address_hint_var,
+            foreground="#b26a00",
+            wraplength=360,
+        ).grid(row=2, column=1, columnspan=3, sticky="w", pady=(2, 0))
 
         middle = ttk.Frame(self, padding=(12, 6, 12, 6))
         middle.grid(row=1, column=0, sticky="nsew")
@@ -350,6 +405,16 @@ class ShareApp(tk.Tk):
 
     def draw_qr(self, url):
         self.qr_canvas.delete("all")
+        if url.startswith("http://127.0.0.1") or url.startswith("http://localhost"):
+            self.qr_canvas.create_text(
+                110, 110,
+                text="未检测到局域网地址\n请连接 Wi-Fi 或网线",
+                justify="center",
+                fill="#b26a00",
+                width=190,
+            )
+            return
+
         matrix = None
 
         try:
@@ -415,13 +480,15 @@ class ShareApp(tk.Tk):
         self._ensure_shared_dir()
         if self.server is not None:
             self.server.set_shared_dir(self.shared_dir)
-            self.server.state.set_read_only(not is_writable(self.shared_dir))
+            self.server.state.set_read_only(self.dir_state == "read_only")
+            self.server.state.set_usable(self.dir_state != "unavailable")
+        self._refresh_path_label()
+        self._update_status()
         try:
             save_config(self.config_path, self.shared_dir, self.listen_port)
         except OSError as exc:
             self.status_var.set("保存配置失败：%s" % exc)
-        self._refresh_path_label()
-        self._update_status()
+            self.status_label.configure(foreground="#aa0000")
 
     def open_folder(self):
         path = str(self.shared_dir)

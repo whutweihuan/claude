@@ -104,9 +104,14 @@
       byId("drop-zone").classList.toggle("disabled", readOnly);
       renderFiles(data.files || []);
     }).catch(function (error) {
-      if (error.message !== "unauthorized") {
-        byId("status-line").textContent = "列表加载失败：" + error.message;
+      if (error.message === "unauthorized") {
+        return;
       }
+      if (error.message === "shared_dir_unavailable") {
+        byId("status-line").textContent = "共享目录不可用，请回到电脑上检查";
+        return;
+      }
+      byId("status-line").textContent = "列表加载失败：" + error.message;
     });
   }
 
