@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import tempfile
 import tkinter as tk
+import tkinter.font as tkfont
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -243,3 +244,61 @@ class GuiPersistenceTests(unittest.TestCase):
                 pass
         self.assertEqual(self.save_path.read_text(encoding="utf-8"), original)
         self.assertFalse(list(self.save_path.parent.glob("save.corrupt-*.json")))
+
+
+class GuiLayoutTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.save_path = Path(self.tmp.name) / "save.json"
+        self.now = 1_700_000_000.0
+        self.app = farm_gui.FarmApp(
+            save_path=self.save_path,
+            start_loops=False,
+            clock=lambda: self.now,
+        )
+        self.app.update_idletasks()
+        self.app.update()
+
+    def tearDown(self):
+        self.app.destroy()
+        self.tmp.cleanup()
+
+    def test_plot_grid_fits_in_farm_area(self):
+        card = self.app.plot_cards[3]
+        self.assertLessEqual(
+            card.winfo_x() + card.winfo_width(),
+            self.app.farm_frame.winfo_width(),
+        )
+        self.assertLessEqual(self.app.winfo_reqwidth(), self.app.winfo_width())
+
+    def test_seed_buttons_fit_their_text(self):
+        for crop_id, button in self.app.seed_buttons.items():
+            font = tkfont.Font(font=button.cget("font"))
+            self.assertLessEqual(
+                font.measure(button.cget("text")),
+                button.winfo_width(),
+                "{} 的种子按钮文字被裁切".format(crop_id),
+            )
+
+    def test_warehouse_labels_fit_their_text(self):
+        for crop_id, button in self.app.sell_buttons.items():
+            row = button.master
+            for child in row.winfo_children():
+                if child.winfo_class() != "Label":
+                    continue
+                text = child.cget("text")
+                if not text:
+                    continue
+                font = tkfont.Font(font=child.cget("font"))
+                self.assertLessEqual(
+                    font.measure(text),
+                    child.winfo_width(),
+                    "{} 的仓库文字 {!r} 需要 {}px，但标签只有 {}px".format(
+                        crop_id, text, font.measure(text), child.winfo_width()
+                    ),
+                )
+        font = tkfont.Font(font=self.app.sell_all_button.cget("font"))
+        self.assertLessEqual(
+            font.measure(self.app.sell_all_button.cget("text")),
+            self.app.sell_all_button.winfo_width(),
+        )
