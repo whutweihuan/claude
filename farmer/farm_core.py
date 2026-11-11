@@ -170,3 +170,13 @@ class FarmState:
             for crop_id, count in self.warehouse.items()
             if crop_id in CROPS and count > 0
         )
+
+    def buy_land(self) -> int:
+        if self.unlocked_plots >= MAX_PLOTS:
+            raise ValueError("土地已经全部开垦")
+        price = LAND_PRICES[self.unlocked_plots - INITIAL_PLOTS]
+        if self.coins < price:
+            raise ValueError("金币不够")
+        self.coins -= price
+        self.unlocked_plots += 1
+        return self.unlocked_plots

@@ -183,3 +183,24 @@ class SellingTests(unittest.TestCase):
         self.assertEqual(self.state.total_income, 210)
         self.assertEqual(self.state.warehouse, {})
         self.assertEqual(self.state.sell_all(), 0)
+
+
+class LandTests(unittest.TestCase):
+    def test_buy_land_deducts_price_and_unlocks_next(self):
+        state = FarmState(coins=1000)
+        self.assertEqual(state.buy_land(), 5)
+        self.assertEqual(state.coins, 800)
+        self.assertEqual(state.buy_land(), 6)
+        self.assertEqual(state.coins, 300)
+
+    def test_buy_land_rejects_insufficient_coins(self):
+        state = FarmState(coins=199)
+        with self.assertRaisesRegex(ValueError, "金币不够"):
+            state.buy_land()
+
+    def test_buy_land_stops_at_eight(self):
+        state = FarmState(coins=100000)
+        for expected in (5, 6, 7, 8):
+            self.assertEqual(state.buy_land(), expected)
+        with self.assertRaisesRegex(ValueError, "全部开垦"):
+            state.buy_land()
