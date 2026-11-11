@@ -113,3 +113,79 @@ class FilesApiTests(ServerTestCase):
         finally:
             other.stop()
             blocker.close()
+
+
+class DownloadTests(ServerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.name = "video 片段.mp4"
+        self.payload = bytes(range(256)) * 40
+        (self.root / self.name).write_bytes(self.payload)
+        self.login()
+
+    def _path(self):
+        return "/download?path=" + urllib.parse.quote(self.name)
+
+    def test_download_requires_login(self):
+        resp, _ = self.request("GET", self._path(), auth=False)
+        self.assertEqual(resp.status, 401)
+
+    def test_full_download(self):
+        resp, body = self.request("GET", self._path())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, self.payload)
+        self.assertIn("attachment", resp.getheader("Content-Disposition"))
+        self.assertEqual(resp.getheader("Accept-Ranges"), "bytes")
+
+    def test_zero_byte_file_and_range(self):
+        (self.root / "empty.txt").write_bytes(b"")
+        path = "/download?path=empty.txt"
+        resp, body = self.request("GET", path)
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, b"")
+        self.assertEqual(resp.getheader("Content-Length"), "0")
+        resp, _ = self.request("GET", path, headers={"Range": "bytes=0-"})
+        self.assertEqual(resp.status, 416)
+
+    def test_closed_range(self):
+        resp, body = self.request("GET", self._path(), headers={"Range": "bytes=100-199"})
+        self.assertEqual(resp.status, 206)
+        self.assertEqual(body, self.payload[100:200])
+        self.assertEqual(resp.getheader("Content-Range"), "bytes 100-199/10240")
+
+    def test_suffix_and_open_ranges(self):
+        resp, body = self.request("GET", self._path(), headers={"Range": "bytes=-10"})
+        self.assertEqual(body, self.payload[-10:])
+        resp, body = self.request("GET", self._path(), headers={"Range": "bytes=10230-"})
+        self.assertEqual(body, self.payload[10230:])
+
+    def test_invalid_range_returns_416(self):
+        resp, body = self.request("GET", self._path(), headers={"Range": "bytes=99999-"})
+        self.assertEqual(resp.status, 416)
+        self.assertEqual(resp.getheader("Content-Range"), "bytes */10240")
+
+    def test_head_returns_length_without_body(self):
+        resp, body = self.request("HEAD", self._path())
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, b"")
+        self.assertEqual(resp.getheader("Content-Length"), "10240")
+
+    def test_traversal_is_rejected(self):
+        (self.tmp / "secret.txt").write_text("secret", encoding="utf-8")
+        resp, body = self.request("GET", "/download?path=" + urllib.parse.quote("../secret.txt"))
+        self.assertIn(resp.status, (400, 403))
+        self.assertNotIn(b"secret", body)
+
+    def test_concurrent_downloads_are_identical(self):
+        results = []
+
+        def worker():
+            results.append(self.request("GET", self._path())[1])
+
+        threads = [threading.Thread(target=worker) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(r == self.payload for r in results))

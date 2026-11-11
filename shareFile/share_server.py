@@ -11,7 +11,7 @@ import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import share_core as core
 
@@ -23,6 +23,8 @@ LOCKOUT_SECONDS = 60
 LISTING_CACHE_SECONDS = 1.0
 CSRF_HEADER = "X-Requested-With"
 CSRF_VALUE = "shareFile"
+DOWNLOAD_BLOCK = 4 * 1024 * 1024
+PROGRESS_INTERVAL = 0.25
 
 
 class RateLimited(Exception):
@@ -240,6 +242,7 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "shareFile"
     sys_version = ""
+    wbufsize = 0
 
     @property
     def state(self):
@@ -321,8 +324,16 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
             self._handle_session()
         elif path == "/api/files":
             self._handle_files()
+        elif path == "/download":
+            self._handle_download(head_only=False)
         else:
             self._json(404, {"error": "not_found"})
+
+    def do_HEAD(self):
+        if urlparse(self.path).path == "/download":
+            self._handle_download(head_only=True)
+        else:
+            self._send(404, b"", "application/json; charset=utf-8")
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -388,4 +399,130 @@ class ShareRequestHandler(BaseHTTPRequestHandler):
         self._json(
             200,
             {"files": self.state.list_files(), "read_only": not self.state.can_write()},
+        )
+
+    def _handle_download(self, head_only):
+        if not self._require_auth():
+            return
+
+        query = parse_qs(urlparse(self.path).query)
+        rel = (query.get("path") or [""])[0]
+        if not rel:
+            self._json(400, {"error": "missing_path"})
+            return
+
+        try:
+            target = core.resolve_shared_path(self.state.shared_dir, rel)
+        except core.UnsafePath:
+            self._reject(400, {"error": "unsafe_path"})
+            return
+
+        if not target.is_file():
+            self._json(404, {"error": "not_found"})
+            return
+
+        try:
+            size = target.stat().st_size
+        except OSError:
+            self._json(404, {"error": "not_found"})
+            return
+
+        try:
+            parsed_range = core.parse_range(self.headers.get("Range"), size)
+        except core.RangeNotSatisfiable:
+            self._send(
+                416,
+                b"",
+                "application/json; charset=utf-8",
+                [
+                    ("Accept-Ranges", "bytes"),
+                    ("Content-Range", "bytes */%d" % size),
+                ],
+            )
+            return
+
+        if parsed_range is None:
+            start, end = 0, size - 1
+            status = 200
+            extra = []
+        else:
+            start, end = parsed_range
+            status = 206
+            extra = [("Content-Range", "bytes %d-%d/%d" % (start, end, size))]
+
+        length = max(0, end - start + 1)
+        disposition = "attachment; filename=\"download\"; filename*=UTF-8''%s" % quote(
+            target.name, safe=""
+        )
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Disposition", disposition)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store")
+        for key, value in extra:
+            self.send_header(key, value)
+        self.end_headers()
+
+        if head_only or length <= 0:
+            return
+
+        name = target.name
+        self.state.emit(kind="download", phase="start", name=name, size=length)
+        sent = 0
+        started = time.time()
+        last_emit = started
+        sendfile_ok = hasattr(self.connection, "sendfile")
+
+        try:
+            with open(str(target), "rb") as handle:
+                while sent < length:
+                    chunk = min(DOWNLOAD_BLOCK, length - sent)
+                    offset = start + sent
+
+                    if sendfile_ok:
+                        try:
+                            self.connection.sendfile(handle, offset, chunk)
+                        except (AttributeError, NotImplementedError):
+                            if sent:
+                                raise
+                            sendfile_ok = False
+                        except OSError:
+                            if sent:
+                                raise
+                            sendfile_ok = False
+
+                    if not sendfile_ok:
+                        handle.seek(offset)
+                        data = handle.read(chunk)
+                        if not data:
+                            break
+                        self.wfile.write(data)
+
+                    sent += chunk
+                    now = time.time()
+                    if now - last_emit >= PROGRESS_INTERVAL:
+                        self.state.emit(
+                            kind="download",
+                            phase="progress",
+                            name=name,
+                            done=sent,
+                            total=length,
+                            speed=sent / max(now - started, 1e-6),
+                        )
+                        last_emit = now
+        except (BrokenPipeError, ConnectionResetError):
+            self.state.emit(kind="download", phase="error", name=name)
+            self.close_connection = True
+            return
+        except OSError:
+            self.state.emit(kind="download", phase="error", name=name)
+            self.close_connection = True
+            return
+
+        self.state.emit(
+            kind="download", phase="done", name=name, done=length, size=length
         )
