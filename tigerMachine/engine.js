@@ -49,6 +49,17 @@
   const SYMBOL_PROB_SUM = SYMBOL_PROB.reduce((a, b) => a + b, 0);
   const LUCK_PROB = 1 - SYMBOL_PROB_SUM - FEATURE_PROB;
 
+  const RING_INDICES_BY_SYMBOL = {};
+  const LUCK_INDICES = [];
+  RING.forEach((id, index) => {
+    if (id === 'luck') {
+      LUCK_INDICES.push(index);
+    } else {
+      if (!RING_INDICES_BY_SYMBOL[id]) RING_INDICES_BY_SYMBOL[id] = [];
+      RING_INDICES_BY_SYMBOL[id].push(index);
+    }
+  });
+
   function mulberry32(seed) {
     let a = seed >>> 0;
     return function () {
@@ -72,6 +83,7 @@
     let guessCount = 0;
     let jackpotArmed = true;
     let lastResult = null;
+    let forced = null;
 
     function totalBet() {
       let total = 0;
@@ -152,12 +164,148 @@
       };
     }
 
+    function pickFrom(list) {
+      return list[Math.floor(rng() * list.length)];
+    }
+
+    function randomLuckIndex() {
+      return pickFrom(LUCK_INDICES);
+    }
+
+    function pickSymbol() {
+      const roll = rng() * SYMBOL_PROB_SUM;
+      let acc = 0;
+      for (let i = 0; i < SYMBOLS.length; i++) {
+        acc += SYMBOL_PROB[i];
+        if (roll < acc) return SYMBOLS[i].id;
+      }
+      return SYMBOLS[SYMBOLS.length - 1].id;
+    }
+
+    function pickFeatureId() {
+      const total = FEATURES.reduce((sum, f) => sum + f.weight, 0);
+      const roll = rng() * total;
+      let acc = 0;
+      for (const feature of FEATURES) {
+        acc += feature.weight;
+        if (roll < acc) return feature.id;
+      }
+      return FEATURES[FEATURES.length - 1].id;
+    }
+
+    // 任务 3 会替换成完整的彩头赔付。
+    function buildFeature(featureId) {
+      const feature = FEATURES.find((f) => f.id === featureId);
+      return { type: featureId, name: feature.name, win: 0 };
+    }
+
+    function forceNextSymbol(symbolId) {
+      if (!SYMBOLS.some((s) => s.id === symbolId)) throw new Error('INVALID_SYMBOL');
+      forced = { kind: 'symbol', symbolId };
+    }
+
+    function forceNextLuck() {
+      forced = { kind: 'luck' };
+    }
+
+    function forceNextFeature(featureId) {
+      if (!FEATURES.some((f) => f.id === featureId)) throw new Error('INVALID_FEATURE');
+      forced = { kind: 'feature', featureId };
+    }
+
+    function spin() {
+      if (pendingWin > 0) throw new Error('ROUND_ACTIVE');
+      const stake = totalBet();
+      if (stake <= 0) throw new Error('NO_BET');
+      if (coins < stake) throw new Error('INSUFFICIENT_COINS');
+      coins -= stake;
+
+      let outcome;
+      if (forced) {
+        outcome = forced;
+        forced = null;
+      } else {
+        const roll = rng();
+        if (roll < FEATURE_PROB) {
+          outcome = { kind: 'feature', featureId: pickFeatureId() };
+        } else if (roll < FEATURE_PROB + SYMBOL_PROB_SUM) {
+          outcome = { kind: 'symbol', symbolId: pickSymbol() };
+        } else {
+          outcome = { kind: 'luck' };
+        }
+      }
+
+      let result;
+      if (outcome.kind === 'symbol') {
+        const sym = SYMBOLS.find((s) => s.id === outcome.symbolId);
+        const stopIndex = pickFrom(RING_INDICES_BY_SYMBOL[sym.id]);
+        const win = bets[sym.id] * sym.odds;
+        pendingWin = win;
+        guessCount = 0;
+        result = {
+          kind: 'symbol',
+          stopIndex,
+          symbolId: sym.id,
+          feature: null,
+          win,
+          pendingWin,
+          message: win > 0
+            ? `${sym.name} ${sym.odds}×，赢 ${win} 分`
+            : `停在${sym.name}，没有押中`,
+        };
+      } else if (outcome.kind === 'luck') {
+        pendingWin = 0;
+        result = {
+          kind: 'luck',
+          stopIndex: randomLuckIndex(),
+          symbolId: null,
+          feature: null,
+          win: 0,
+          pendingWin: 0,
+          message: '跑空',
+        };
+      } else {
+        const feature = buildFeature(outcome.featureId);
+        pendingWin = feature.win;
+        guessCount = 0;
+        result = {
+          kind: 'feature',
+          stopIndex: randomLuckIndex(),
+          symbolId: null,
+          feature,
+          win: feature.win,
+          pendingWin,
+          message: feature.name,
+        };
+      }
+
+      if (outcome.kind === 'feature') spinsSinceFeature = 0;
+      else spinsSinceFeature += 1;
+
+      lastResult = result;
+      return result;
+    }
+
+    function collect() {
+      if (pendingWin <= 0) return { collected: 0, jackpot: false };
+      const amount = pendingWin;
+      coins += amount;
+      pendingWin = 0;
+      guessCount = 0;
+      return { collected: amount, jackpot: false };
+    }
+
     return {
       bet,
       clearBets,
       betAll,
       insertCoin,
       getState,
+      spin,
+      collect,
+      forceNextSymbol,
+      forceNextLuck,
+      forceNextFeature,
     };
   }
 

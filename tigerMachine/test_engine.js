@@ -79,4 +79,64 @@ test('getState 返回快照', () => {
   assert.strictEqual(s.bets.apple, 0);
 });
 
+function seq(values) {
+  let i = 0;
+  return () => {
+    if (i >= values.length) throw new Error('RNG 用尽');
+    return values[i++];
+  };
+}
+
+test('命中图案按押分×赔率赔付', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  const r = g.spin();
+  assert.strictEqual(r.kind, 'symbol');
+  assert.strictEqual(r.symbolId, 'banana');
+  assert.strictEqual(r.win, 120);
+  assert.ok(E.RING[r.stopIndex] === 'banana');
+  assert.strictEqual(g.getState().coins, 990);
+  assert.strictEqual(g.getState().pendingWin, 120);
+});
+
+test('停在没押的图案不赔', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('apple', 5);
+  g.forceNextSymbol('bar');
+  const r = g.spin();
+  assert.strictEqual(r.win, 0);
+  assert.strictEqual(g.getState().pendingWin, 0);
+});
+
+test('跑空不赔，但仍扣押分', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('s_banana', 5);
+  g.forceNextLuck();
+  const r = g.spin();
+  assert.strictEqual(r.kind, 'luck');
+  assert.strictEqual(r.win, 0);
+  assert.strictEqual(g.getState().coins, 995);
+});
+
+test('收分把 pendingWin 加回金币', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  g.spin();
+  const c = g.collect();
+  assert.strictEqual(c.collected, 120);
+  assert.strictEqual(g.getState().coins, 1110);
+  assert.strictEqual(g.getState().pendingWin, 0);
+});
+
+test('有未收奖金时禁止再开局/改注', () => {
+  const g = E.createGame({ rng: seq([0]) });
+  g.bet('banana', 10);
+  g.forceNextSymbol('banana');
+  g.spin();
+  assert.throws(() => g.spin(), /ROUND_ACTIVE/);
+  assert.deepStrictEqual(g.bet('apple', 1), { ok: false, error: 'ROUND_ACTIVE' });
+});
+
 summary();
