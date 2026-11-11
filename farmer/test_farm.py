@@ -2,10 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from farm_core import (
     CROPS, INITIAL_COINS, INITIAL_PLOTS, LAND_PRICES, MAX_PLOTS, FarmState,
-    Plot, load_state, save_state,
+    Plot, SaveUnreadableError, load_state, save_state,
 )
 
 
@@ -295,3 +296,19 @@ class SaveLoadTests(unittest.TestCase):
         self.assertIsNone(warning)
         self.assertIsNone(loaded.plots[0])
         self.assertEqual(loaded.warehouse, {"fanqie": 2})
+
+    def test_unreadable_save_raises_and_keeps_file(self):
+        self.path.write_text(
+            json.dumps({
+                "coins": 999,
+                "unlocked_plots": 4,
+                "plots": [None] * 8,
+            }),
+            encoding="utf-8",
+        )
+        original = self.path.read_text(encoding="utf-8")
+        with mock.patch.object(Path, "open", side_effect=PermissionError("被占用")):
+            with self.assertRaises(SaveUnreadableError):
+                load_state(self.path)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), original)
+        self.assertFalse(list(Path(self.tmp.name).glob("save.corrupt-*.json")))

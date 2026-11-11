@@ -650,7 +650,7 @@ class SaveLoadTests(unittest.TestCase):
   - `selected_crop` 缺失或未知时用 `"xiaobaicai"`；统计字段缺失按 0，非法负数按 0；
   - 未知多余字段忽略；存档里的未知作物地块按 `None`。
 - `save_state`：先写 `path.name + ".tmp"`，再用 `os.replace` 原子替换；`ensure_ascii=False`、`indent=2`；异常向上抛。
-- `load_state`：文件不存在返回 `(FarmState(), None)`；读取或校验失败时把原文件重命名为 `save.corrupt-<int(time.time())>.json`（重命名失败也忽略），返回 `(FarmState(), "存档损坏，已开始新的一局")`。
+- `load_state`：文件不存在返回 `(FarmState(), None)`；解析或校验失败时把原文件重命名为 `save.corrupt-<int(time.time())>.json`（重命名失败也忽略），返回 `(FarmState(), "存档损坏，已开始新的一局")`。读文件本身的其它 `OSError`（被占用、权限不足）不得当作损坏：抛 `SaveUnreadableError`，由 GUI 进入本次不写盘模式，绝不覆盖原档。
 
 - [ ] **步骤 4：运行测试验证通过**
 
@@ -941,6 +941,7 @@ class GuiEconomyTests(unittest.TestCase):
 - 种子栏旁放 `一键收获` 按钮；没有成熟作物时禁用。
 - 回调：
   - `_on_harvest_all_click`：调 `harvest_all`，状态栏 `收获了 ${n} 份作物` 或 `没有可收获的作物`；
+  - 收获成功后在地块上方显示约 1 秒的“+1 作物名”飘字；一键收获对每个实际收获的地块都显示；
   - `_on_sell_click`：调 `sell`，成功提示 `卖出${name}，+${amount} 金币`，库存为 0 时提示 `仓库里没有${name}`；
   - `_on_sell_all_click`：调 `sell_all`，提示 `全部卖出，+${amount} 金币`；
   - `_on_buy_land_click`：调 `buy_land`，提示 `已开垦第 ${n} 块地`，失败显示错误文案。

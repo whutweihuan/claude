@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import List
 
 from farm_core import (
-    CROPS, INITIAL_PLOTS, LAND_PRICES, MAX_PLOTS, load_state, save_state,
+    CROPS, INITIAL_PLOTS, LAND_PRICES, MAX_PLOTS, FarmState,
+    SaveUnreadableError, load_state, save_state,
 )
 
 BG = "#F6F1E7"
@@ -76,8 +77,27 @@ class PlotCard(tk.Frame):
                 result.append(self.canvas.itemcget(item, "text"))
         return result
 
+    def _clear_static(self):
+        for item in self.canvas.find_all():
+            if "float" not in self.canvas.gettags(item):
+                self.canvas.delete(item)
+
+    def show_float(self, text):
+        item = self.canvas.create_text(
+            100, 52, text=text, fill="#B5651D",
+            font=("Microsoft YaHei UI", 12, "bold"), tags=("float",),
+        )
+
+        def remove():
+            try:
+                self.canvas.delete(item)
+            except tk.TclError:
+                pass
+
+        self.after(1000, remove)
+
     def render(self, state, index, now):
-        self.canvas.delete("all")
+        self._clear_static()
 
         if index >= state.unlocked_plots:
             self._draw_soil(locked=True)
@@ -197,7 +217,13 @@ class FarmApp(tk.Tk):
         self.save_path = Path(save_path) if save_path else Path(__file__).with_name("save.json")
         self.start_loops = start_loops
         self.clock = clock
-        self.state, self.load_warning = load_state(self.save_path)
+        self.save_enabled = True
+        try:
+            self.state, self.load_warning = load_state(self.save_path)
+        except SaveUnreadableError as exc:
+            self.state = FarmState()
+            self.load_warning = str(exc)
+            self.save_enabled = False
         self._alive = True
         self._status_reset_id = None
 
@@ -436,6 +462,7 @@ class FarmApp(tk.Tk):
                 self.set_status(str(exc))
                 return
             self.set_status("收获了{}".format(crop.name))
+            self.plot_cards[index].show_float("+1 {}".format(crop.name))
             self._save()
             self.refresh()
             return
@@ -453,7 +480,15 @@ class FarmApp(tk.Tk):
         self.refresh()
 
     def _on_harvest_all_click(self):
-        count = self.state.harvest_all(self.clock())
+        now = self.clock()
+        ripe = [
+            (index, CROPS[self.state.plots[index].crop_id].name)
+            for index in range(self.state.unlocked_plots)
+            if self.state.is_mature(index, now)
+        ]
+        count = self.state.harvest_all(now)
+        for index, name in ripe:
+            self.plot_cards[index].show_float("+1 {}".format(name))
         if count:
             self.set_status("收获了 {} 份作物".format(count))
         else:
@@ -493,6 +528,8 @@ class FarmApp(tk.Tk):
         self.refresh()
 
     def _save(self):
+        if not self.save_enabled:
+            return
         try:
             save_state(self.state, self.save_path)
         except OSError as exc:

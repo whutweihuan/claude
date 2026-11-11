@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import farm_gui
-from farm_core import CROPS
+from farm_core import CROPS, FarmState, save_state
 
 
 class GuiSkeletonTests(unittest.TestCase):
@@ -132,6 +132,23 @@ class GuiEconomyTests(unittest.TestCase):
         self.assertIn("卖出小白菜", self.app.status_var.get())
         self.assertTrue(self.app.sell_buttons["xiaobaicai"].cget("state") == "disabled")
 
+    def test_harvest_shows_floating_text(self):
+        self._plant_ripe()
+        self.app._on_plot_click(0)
+        texts = self.app.plot_cards[0].texts()
+        self.assertTrue(any(t.startswith("+1 小白菜") for t in texts))
+
+    def test_harvest_all_shows_floating_text_for_each_ripe_plot(self):
+        self._plant_ripe(0, "xiaobaicai")
+        self._plant_ripe(1, "fanqie")
+        self.app._on_harvest_all_click()
+        self.assertTrue(
+            any(t.startswith("+1 小白菜") for t in self.app.plot_cards[0].texts())
+        )
+        self.assertTrue(
+            any(t.startswith("+1 番茄") for t in self.app.plot_cards[1].texts())
+        )
+
     def test_harvest_all_then_sell_all(self):
         self._plant_ripe(0, "xiaobaicai")
         self._plant_ripe(1, "fanqie")
@@ -205,3 +222,24 @@ class GuiPersistenceTests(unittest.TestCase):
             self.assertEqual(app2.state.coins, 777)
         finally:
             app2.destroy()
+
+    def test_unreadable_save_is_not_overwritten(self):
+        save_state(FarmState(coins=999), self.save_path)
+        original = self.save_path.read_text(encoding="utf-8")
+        with mock.patch.object(Path, "open", side_effect=PermissionError("被占用")):
+            app = farm_gui.FarmApp(
+                save_path=self.save_path,
+                start_loops=False,
+                clock=lambda: self.now,
+            )
+        try:
+            self.assertIn("读取存档失败", app.status_var.get())
+            app._on_plot_click(0)
+            app._on_close()
+        finally:
+            try:
+                app.destroy()
+            except tk.TclError:
+                pass
+        self.assertEqual(self.save_path.read_text(encoding="utf-8"), original)
+        self.assertFalse(list(self.save_path.parent.glob("save.corrupt-*.json")))

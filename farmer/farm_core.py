@@ -17,6 +17,10 @@ WATER_MAX = 3
 WATER_COOLDOWN = 10 * 60
 
 
+class SaveUnreadableError(Exception):
+    """存档存在，但当前无法读取（被占用、权限不足或其它 I/O 错误）。"""
+
+
 @dataclass(frozen=True)
 class Crop:
     crop_id: str
@@ -284,20 +288,33 @@ def save_state(state: FarmState, path: Union[str, Path]) -> None:
     os.replace(tmp, path)
 
 
+def _backup_corrupt_save(path: Path) -> None:
+    backup = path.with_name(
+        "{}.corrupt-{}.json".format(path.stem, int(time.time()))
+    )
+    try:
+        os.replace(path, backup)
+    except OSError:
+        pass
+
+
 def load_state(path: Union[str, Path]) -> Tuple[FarmState, Optional[str]]:
     path = Path(path)
-    if not path.exists():
-        return FarmState(), None
     try:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return FarmState.from_dict(data), None
-    except (OSError, ValueError, json.JSONDecodeError):
-        backup = path.with_name(
-            "{}.corrupt-{}.json".format(path.stem, int(time.time()))
+    except FileNotFoundError:
+        return FarmState(), None
+    except ValueError:
+        _backup_corrupt_save(path)
+        return FarmState(), "存档损坏，已开始新的一局"
+    except OSError as exc:
+        raise SaveUnreadableError(
+            "读取存档失败：{}；本次不会保存".format(exc)
         )
-        try:
-            os.replace(path, backup)
-        except OSError:
-            pass
+
+    try:
+        return FarmState.from_dict(data), None
+    except ValueError:
+        _backup_corrupt_save(path)
         return FarmState(), "存档损坏，已开始新的一局"
