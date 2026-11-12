@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 """奶牛牧场核心逻辑：成长、繁殖、挤奶、经济与存档。不依赖 Tkinter。"""
 
+import json
+import os
+import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
+
+
+class SaveUnreadableError(Exception):
+    """存档存在，但当前无法读取（被占用、权限不足或其它 I/O 错误）。"""
 
 GROWTH_YOUNG = 45 * 60
 GROWTH_ADULT = 135 * 60
@@ -321,6 +329,154 @@ class GameState:
         self.feed_count -= 1
         cow.fed_count += 1
         cow.last_fed_at = now
+
+    def to_dict(self) -> dict:
+        return {
+            "version": 1,
+            "coins": self.coins,
+            "capacity": self.capacity,
+            "next_cow_id": self.next_cow_id,
+            "cows": [
+                {
+                    "id": c.id, "name": c.name, "born_at": c.born_at,
+                    "fed_count": c.fed_count, "last_fed_at": c.last_fed_at,
+                    "last_milked_at": c.last_milked_at, "pregnant": c.pregnant,
+                    "due_at": c.due_at, "recovery_until": c.recovery_until,
+                }
+                for c in self.cows
+            ],
+            "machines": list(self.machines),
+            "warehouse": {k: v for k, v in self.warehouse.items()
+                          if k in ("milk", "cheese") and v > 0},
+            "feed_count": self.feed_count,
+            "total_income": self.total_income,
+            "total_births": self.total_births,
+            "settled_until": self.settled_until,
+            "saved_at": time.time(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GameState":
+        if not isinstance(data, dict):
+            raise ValueError("存档格式不正确")
+        if not (_is_plain_int(data.get("coins")) and data["coins"] >= 0):
+            raise ValueError("存档金币不合法")
+        if not (_is_plain_int(data.get("capacity"))
+                and INITIAL_CAPACITY <= data["capacity"] <= MAX_CAPACITY):
+            raise ValueError("存档容量不合法")
+        if not (_is_plain_int(data.get("next_cow_id")) and data["next_cow_id"] >= 1):
+            raise ValueError("存档牛编号不合法")
+        raw_cows = data.get("cows")
+        if not isinstance(raw_cows, list):
+            raise ValueError("存档牛群不合法")
+        cows: List[Cow] = []
+        seen_ids = set()
+        for raw in raw_cows:
+            if not isinstance(raw, dict):
+                raise ValueError("存档牛不合法")
+            cow_id = raw.get("id")
+            if not (_is_plain_int(cow_id) and cow_id >= 1) or cow_id in seen_ids:
+                raise ValueError("存档牛 id 不合法")
+            seen_ids.add(cow_id)
+            name = raw.get("name")
+            if not (isinstance(name, str) and name):
+                raise ValueError("存档牛名字不合法")
+            for key in ("born_at", "last_fed_at", "last_milked_at",
+                        "due_at", "recovery_until"):
+                if not _is_number(raw.get(key)):
+                    raise ValueError("存档牛时间不合法")
+            fed_count = raw.get("fed_count")
+            if not (_is_plain_int(fed_count) and 0 <= fed_count <= FEED_MAX):
+                raise ValueError("存档喂食次数不合法")
+            pregnant = raw.get("pregnant")
+            if not isinstance(pregnant, bool):
+                raise ValueError("存档怀孕状态不合法")
+            cows.append(Cow(
+                id=cow_id, name=name, born_at=float(raw["born_at"]),
+                fed_count=fed_count, last_fed_at=float(raw["last_fed_at"]),
+                last_milked_at=float(raw["last_milked_at"]), pregnant=pregnant,
+                due_at=float(raw["due_at"]), recovery_until=float(raw["recovery_until"]),
+            ))
+        raw_machines = data.get("machines")
+        if not isinstance(raw_machines, list) or len(raw_machines) > MAX_MACHINES:
+            raise ValueError("存档加工器不合法")
+        machines: List[Optional[float]] = []
+        for item in raw_machines:
+            if item is None:
+                machines.append(None)
+            elif _is_number(item) and item >= 0:
+                machines.append(float(item))
+            else:
+                raise ValueError("存档加工器不合法")
+        raw_warehouse = data.get("warehouse")
+        if not isinstance(raw_warehouse, dict):
+            raise ValueError("存档仓库不合法")
+        warehouse: Dict[str, int] = {}
+        for key in ("milk", "cheese"):
+            value = raw_warehouse.get(key, 0)
+            if not (_is_plain_int(value) and value >= 0):
+                raise ValueError("存档仓库不合法")
+            if value > 0:
+                warehouse[key] = value
+        for key in ("feed_count", "total_income", "total_births"):
+            value = data.get(key)
+            if not (_is_plain_int(value) and value >= 0):
+                raise ValueError("存档计数不合法")
+        if not _is_number(data.get("settled_until")):
+            raise ValueError("存档结算时间不合法")
+        return cls(
+            coins=data["coins"], capacity=data["capacity"], cows=cows,
+            machines=machines, warehouse=warehouse, feed_count=data["feed_count"],
+            total_income=data["total_income"], total_births=data["total_births"],
+            next_cow_id=data["next_cow_id"], settled_until=float(data["settled_until"]),
+        )
+
+
+def _is_plain_int(value) -> bool:
+    return type(value) is int
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def save_state(state: GameState, path: Union[str, Path]) -> None:
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(state.to_dict(), fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _backup_corrupt_save(path: Path) -> None:
+    backup = path.with_name(
+        "{}.corrupt-{}.json".format(path.stem, int(time.time()))
+    )
+    try:
+        os.replace(path, backup)
+    except OSError:
+        pass
+
+
+def load_state(path: Union[str, Path]) -> Tuple[GameState, Optional[str]]:
+    path = Path(path)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return new_game(time.time()), None
+    except ValueError:
+        _backup_corrupt_save(path)
+        return new_game(time.time()), "存档损坏，已开始新的一局"
+    except OSError as exc:
+        raise SaveUnreadableError(
+            "读取存档失败：{}；本次不会保存".format(exc)
+        )
+    try:
+        return GameState.from_dict(data), None
+    except ValueError:
+        _backup_corrupt_save(path)
+        return new_game(time.time()), "存档损坏，已开始新的一局"
 
 
 def free_slot_left(state: GameState) -> bool:

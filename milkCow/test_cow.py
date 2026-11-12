@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
 """cow_core 核心逻辑单元测试：时间以显式参数注入，不真的等待。"""
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from cow_core import Cow, free_slot_left, new_game, stage_of, udder_ready
+from cow_core import (
+    Cow, SaveUnreadableError, free_slot_left, load_state, new_game,
+    save_state, stage_of, udder_ready,
+)
 
 T0 = 1_700_000_000.0
 
@@ -385,6 +392,101 @@ class BreedingTests(unittest.TestCase):
         self.assertEqual(snapshot(s), snap)  # 无新事件、不重复生产、不崩溃
         s.catch_up(T0 + 7200)
         self.assertEqual(snapshot(s), snap)
+
+
+class SaveTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "save.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _rich_state(self):
+        s = new_game(T0)
+        s.coins = 5000
+        s.catch_up(T0)                      # 花花受孕 due T0+3600
+        s.buy_calf(T0)                      # 妞妞（id2）
+        s.buy_feed()
+        s.buy_feed()
+        s.buy_machine()
+        s.buy_machine()
+        s.warehouse["milk"] = 10
+        s.warehouse["cheese"] = 1
+        s.process(0, T0)
+        s.process(1, T0)
+        s.expand_capacity()
+        s.cows[1].fed_count = 1
+        s.total_income = 777
+        return s
+
+    def _write_raw(self, data):
+        self.path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_roundtrip_preserves_world(self):
+        s = self._rich_state()
+        save_state(s, self.path)
+        loaded, msg = load_state(self.path)
+        self.assertIsNone(msg)
+        self.assertEqual(snapshot(loaded), snapshot(s))
+
+    def test_missing_file_starts_new_game(self):
+        s, msg = load_state(self.path.parent / "nope.json")
+        self.assertIsNone(msg)
+        self.assertEqual((s.coins, s.capacity, len(s.cows)), (200, 4, 1))
+
+    def test_corrupt_json_is_backed_up(self):
+        self.path.write_text("{ 这不是 JSON", encoding="utf-8")
+        s, msg = load_state(self.path)
+        self.assertIn("存档损坏", msg)
+        self.assertFalse(self.path.exists())
+        self.assertEqual(len(list(self.path.parent.glob("save.corrupt-*.json"))), 1)
+
+    def test_bad_field_is_corrupt(self):
+        base = self._rich_state().to_dict()
+        dup = json.loads(json.dumps(base))
+        dup["cows"][1]["id"] = dup["cows"][0]["id"]
+        variants = [
+            {**base, "coins": "abc"},
+            {**base, "capacity": 99},
+            {**base, "warehouse": {"milk": -2}},
+            {**base, "machines": [None, None, None, None]},
+            dup,
+            "not-a-dict",
+        ]
+        for bad in variants:
+            with self.subTest(bad=str(bad)[:24]):
+                self._write_raw(bad)
+                s, msg = load_state(self.path)
+                self.assertIn("存档损坏", msg)
+                self.assertEqual((s.coins, s.capacity, len(s.cows)), (200, 4, 1))
+
+    def test_unknown_keys_ignored(self):
+        data = self._rich_state().to_dict()
+        data["future_field"] = {"x": 1}
+        data["warehouse"]["yogurt"] = 5
+        self._write_raw(data)
+        loaded, msg = load_state(self.path)
+        self.assertIsNone(msg)
+        self.assertEqual(loaded.stock("yogurt"), 0)
+        self.assertEqual(snapshot(loaded), snapshot(self._rich_state()))
+
+    def test_permission_error_raises_unreadable(self):
+        save_state(self._rich_state(), self.path)
+        original = self.path.read_text(encoding="utf-8")
+        with mock.patch.object(Path, "open", side_effect=PermissionError("被占用")):
+            with self.assertRaises(SaveUnreadableError):
+                load_state(self.path)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), original)
+        self.assertFalse(list(self.path.parent.glob("save.corrupt-*.json")))
+
+    def test_offline_growth_survives_save(self):
+        s = self._rich_state()
+        save_state(s, self.path)
+        loaded, _ = load_state(self.path)
+        loaded.catch_up(T0 + 2 * 3600)  # 预产期 T0+3600 → 生小牛
+        self.assertEqual(loaded.total_births, s.total_births + 1)
+        self.assertEqual(len(loaded.cows), len(s.cows) + 1)
 
 
 if __name__ == "__main__":
