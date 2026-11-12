@@ -202,12 +202,14 @@ class ShopTests(unittest.TestCase):
         self.s.catch_up(T0 + 7200)
         self.assertEqual(len(self.s.cows), 0)  # 不会凭空生产
 
-    def test_sell_opens_reservation_slot(self):
+    def test_sell_pregnant_frees_slot_for_queue(self):
         self.s.capacity = 2
         self.s.cows.append(make_cow(id=2, pregnant=True, due_at=T0 + 3600))
-        self.assertFalse(free_slot_left(self.s))
+        self.assertFalse(free_slot_left(self.s))  # 1 牛 + 1 孕 = 2 ≥ 容量
         self.s.sell_cow(2, T0)
-        self.assertTrue(free_slot_left(self.s))
+        # 孕妇被卖 → 预留随她消失；位置被唯一可孕的排队牛（花花）受孕补位
+        self.assertTrue(self.s.find_cow(1).pregnant)
+        self.assertFalse(free_slot_left(self.s))  # 怀上后重新占住预留
 
     def test_buy_feed(self):
         self.assertEqual(self.s.buy_feed(), 1)  # 返回背包份数
@@ -284,6 +286,105 @@ class CheeseTests(unittest.TestCase):
     def test_process_unknown_machine(self):
         with self.assertRaisesRegex(ValueError, "没有这台加工器"):
             self.s.process(5, T0)
+
+
+def snapshot(s):
+    """核心世界状态的完整可比快照（用于一致性/幂等断言）。"""
+    return {
+        "coins": s.coins,
+        "capacity": s.capacity,
+        "cows": sorted(
+            (c.id, c.name, c.born_at, c.fed_count, c.last_fed_at,
+             c.last_milked_at, c.pregnant, c.due_at, c.recovery_until)
+            for c in s.cows
+        ),
+        "machines": list(s.machines),
+        "warehouse": dict(s.warehouse),
+        "feed_count": s.feed_count,
+        "total_income": s.total_income,
+        "total_births": s.total_births,
+        "next_cow_id": s.next_cow_id,
+        "settled_until": s.settled_until,
+    }
+
+
+class BreedingTests(unittest.TestCase):
+    def test_initial_cow_pregnant_at_first_settle(self):
+        s = new_game(T0)
+        s.catch_up(T0)
+        self.assertTrue(s.cows[0].pregnant)
+        self.assertEqual(s.cows[0].due_at, T0 + 3600)
+
+    def test_first_settle_later_still_anchors_conception_at_start(self):
+        s = new_game(T0)
+        s.catch_up(T0 + 7200)  # 首次结算迟到 2 小时
+        # 初始牛仍在 T0 受孕（事件时间锚定）：T0+3600 已生产，T0+5400 休养结束再孕
+        self.assertEqual(s.total_births, 1)
+        self.assertEqual(len(s.cows), 2)
+        self.assertTrue(s.cows[0].pregnant)
+        self.assertEqual(s.cows[0].due_at, T0 + 5400 + 3600)
+
+    def test_offline_jump_equals_online_stepping(self):
+        a = new_game(T0)
+        b = new_game(T0)
+        for k in range(1, 25):  # 在线：每 30 分钟结算一步，共 12 小时
+            a.catch_up(T0 + k * 1800.0)
+        b.catch_up(T0 + 12 * 3600.0)  # 离线：一跳 12 小时
+        self.assertEqual(snapshot(a), snapshot(b))
+        # 预期轨迹：T0 受孕 → +1h 生妞妞 → +1.5h 母再孕 → +2.5h 生大壮 →
+        #          +3h 母再孕 → +4h 生团团满 4 头 → 全员排队等空位
+        self.assertEqual([c.name for c in b.cows], ["花花", "妞妞", "大壮", "团团"])
+        self.assertEqual(b.total_births, 3)
+        self.assertFalse(any(c.pregnant for c in b.cows))
+
+    def test_idempotent_catch_up(self):
+        s = new_game(T0)
+        s.catch_up(T0 + 50 * 3600.0)
+        snap = snapshot(s)
+        s.catch_up(T0 + 50 * 3600.0)
+        self.assertEqual(snap, snapshot(s))
+
+    def test_reservation_gate_blocks_births(self):
+        s = new_game(T0)
+        s.capacity = 1
+        s.catch_up(T0 + 10 * 3600.0)
+        self.assertEqual(len(s.cows), 1)
+        self.assertFalse(s.cows[0].pregnant)
+
+    def test_pending_queue_conceives_in_order(self):
+        s = new_game(T0)
+        s.catch_up(T0)  # 花花受孕，due T0+3600
+        s.cows.append(make_cow(id=2, born_at=T0 - 20000))  # ready_at 更早
+        s.cows.append(make_cow(id=3, born_at=T0 - 15000))  # ready_at 更晚
+        s.capacity = 4  # 3 牛 + 1 孕 = 4，无空位，两头排队
+        self.assertFalse(s.find_cow(2).pregnant)
+        s.sell_cow(3, T0)  # 腾位 → 排队更早的 2 号受孕
+        self.assertTrue(s.find_cow(2).pregnant)
+        self.assertEqual(s.find_cow(2).due_at, T0 + 3600)
+
+    def test_two_pregnant_due_same_moment(self):
+        s = new_game(T0)
+        s.cows[0].pregnant = True
+        s.cows[0].due_at = T0 + 3600
+        s.cows.append(make_cow(id=2, born_at=T0 - 20000,
+                               pregnant=True, due_at=T0 + 3600))
+        s.capacity = 3
+        s.catch_up(T0 + 3600)
+        self.assertEqual(len(s.cows), 4)  # 两头都产（强制构造可超容，但不崩溃）
+        self.assertEqual(s.total_births, 2)
+        self.assertFalse(any(c.pregnant for c in s.cows))
+        self.assertEqual([c.name for c in s.cows[2:]], ["妞妞", "大壮"])
+        s.catch_up(T0 + 4 * 3600)  # 超容 → 不再受孕
+        self.assertEqual(len(s.cows), 4)
+
+    def test_time_rollback_no_crash(self):
+        s = new_game(T0)
+        s.catch_up(T0 + 7200)
+        snap = snapshot(s)
+        s.catch_up(T0 + 600)  # 时间回拨
+        self.assertEqual(snapshot(s), snap)  # 无新事件、不重复生产、不崩溃
+        s.catch_up(T0 + 7200)
+        self.assertEqual(snapshot(s), snap)
 
 
 if __name__ == "__main__":

@@ -101,10 +101,55 @@ class GameState:
         return self.warehouse.get(item, 0)
 
     def catch_up(self, now: float) -> None:
-        """把所有时间驱动事件结算到 now（任务 6 扩展繁殖链）。"""
+        """把所有时间驱动事件结算到 now。
+
+        事件 = 孕妇的 due_at ∪ 未孕牛 max(ready_at, cursor)。事件时间一律锚定
+        事件自身（生产 born_at=T、休养 =T+POSTPARTUM、受孕 due=T+GESTATION），
+        因此“离线一跳”与“在线逐步”得到同一世界。同一 cursor 上排队无位的牛
+        记入 passed_ids，仅在 cursor 前进后重新入队 → 循环必然终止。
+        """
         self._settle_machines(now)
-        if now > self.settled_until:
-            self.settled_until = now
+        cursor = self.settled_until
+        passed_ids: set = set()
+        while True:
+            candidates = []
+            for cow in self.cows:
+                if cow.pregnant:
+                    if cow.due_at <= now:
+                        candidates.append(cow.due_at)
+                else:
+                    t = ready_at(cow)
+                    if t <= now and cow.id not in passed_ids:
+                        candidates.append(max(t, cursor))
+            if not candidates:
+                break
+            moment = min(candidates)
+            mothers = [c for c in self.cows if c.pregnant and c.due_at == moment]
+            for mother in mothers:
+                self._give_birth(mother, moment)
+            if moment > cursor:
+                cursor = moment
+                passed_ids = set()
+            self.conception_pass(moment)
+            for cow in self.cows:
+                if not cow.pregnant and ready_at(cow) <= cursor:
+                    passed_ids.add(cow.id)
+        self.settled_until = max(self.settled_until, cursor, now)
+        self.conception_pass(self.settled_until)
+
+    def _give_birth(self, mother: Cow, at: float) -> None:
+        calf = Cow(
+            id=self.next_cow_id,
+            name=self.next_unused_name(),
+            born_at=at,
+            last_milked_at=at,
+        )
+        self.next_cow_id += 1
+        self.cows.append(calf)
+        self.total_births += 1
+        mother.pregnant = False
+        mother.due_at = 0.0
+        mother.recovery_until = at + POSTPARTUM
 
     def _settle_machines(self, now: float) -> None:
         for i, started in enumerate(self.machines):
@@ -188,7 +233,15 @@ class GameState:
         return "小牛 {}".format(self.next_cow_id)
 
     def conception_pass(self, at: float) -> None:
-        """空位补位：把可孕牛按先后顺序填入空位。任务 6 实现。"""
+        """空位补位：ready_at ≤ at 的未孕牛按 (ready_at, id) 先进先出受孕。"""
+        waiting = [c for c in self.cows
+                   if not c.pregnant and ready_at(c) <= at]
+        waiting.sort(key=lambda c: (ready_at(c), c.id))
+        for cow in waiting:
+            if not free_slot_left(self):
+                break
+            cow.pregnant = True
+            cow.due_at = at + GESTATION
 
     def buy_calf(self, now: float) -> int:
         self.catch_up(now)
