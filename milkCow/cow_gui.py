@@ -72,6 +72,20 @@ class PastureCanvas(tk.Canvas):
                 result.append(self.itemcget(item, "text"))
         return result
 
+    def show_float(self, text: str, x: float, y: float):
+        item = self.create_text(
+            x, y, text=text, fill="#B5651D",
+            font=("Microsoft YaHei UI", 12, "bold"), tags=("float",),
+        )
+
+        def remove():
+            try:
+                self.delete(item)
+            except tk.TclError:
+                pass
+
+        self.after(1000, remove)
+
     def _draw_scenery(self):
         for band in ((60, 74), (170, 182), (300, 314), (400, 410)):
             self.create_rectangle(
@@ -463,46 +477,169 @@ class CowApp(tk.Tk):
 
         self._status_reset_id = self.after(seconds * 1000, reset)
 
-    # ---------- 事件入口（任务 9 接线） ----------
+    # ---------- 事件入口 ----------
 
     def _on_pasture_click(self, event):
-        pass
+        items = self.pasture.find_overlapping(
+            event.x - 1, event.y - 1, event.x + 1, event.y + 1)
+        for item in items:
+            for tag in self.pasture.gettags(item):
+                if isinstance(tag, str) and tag.startswith("cow-"):
+                    self._on_cow_click(int(tag[4:]))
+                    return
+        self.selected_id = None
+        self.refresh()
+
+    def _on_cow_click(self, cow_id: int):
+        now = self.clock()
+        cow = self.state.find_cow(cow_id)
+        if cow is None:
+            return
+        if udder_ready(cow, now):
+            self._do_milk(cow, now)
+        else:
+            self.selected_id = cow_id
+            self.refresh()
+
+    def _do_milk(self, cow, now: float):
+        try:
+            self.state.milk(cow.id, now)
+        except ValueError as exc:
+            self.set_status(str(exc))
+            self.refresh()
+            return
+        x, y = self.positions.get(cow.id, (40.0, 40.0))
+        self.pasture.show_float("+1 牛奶", x, y - 34)
+        self.set_status("挤了 {} 一瓶奶".format(cow.name))
+        self._save()
+        self.refresh()
 
     def _on_milking_click(self):
-        pass
+        if self.selected_id is None:
+            return
+        cow = self.state.find_cow(self.selected_id)
+        if cow is not None:
+            self._do_milk(cow, self.clock())
 
     def _on_milk_all_click(self):
-        pass
+        milked = self.state.milk_all(self.clock())
+        if milked:
+            self.set_status("一键挤奶 {} 头，牛奶 +{}".format(milked, milked))
+            self._save()
+        else:
+            self.set_status("没有蓄满奶的牛")
+        self.refresh()
 
     def _on_feed_click(self):
-        pass
+        if self.selected_id is None:
+            return
+        cow = self.state.find_cow(self.selected_id)
+        if cow is None:
+            return
+        try:
+            self.state.feed(cow.id, self.clock())
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.set_status("喂了 {} 一份高级饲料".format(cow.name))
+            self._save()
+        self.refresh()
 
     def _on_sell_cow_click(self):
-        pass
+        if self.selected_id is None:
+            return
+        cow = self.state.find_cow(self.selected_id)
+        if cow is None:
+            return
+        try:
+            got = self.state.sell_cow(cow.id, self.clock())
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.selected_id = None
+            self.set_status("卖出了 {}，+{} 金币".format(cow.name, got))
+            self._save()
+        self.refresh()
 
     def _on_buy_calf_click(self):
-        pass
+        try:
+            self.state.buy_calf(self.clock())
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.set_status("买回一头牛仔")
+            self._save()
+        self.refresh()
 
     def _on_buy_feed_click(self):
-        pass
+        try:
+            count = self.state.buy_feed()
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.set_status("购入高级饲料，背包 {} 份".format(count))
+            self._save()
+        self.refresh()
 
     def _on_buy_machine_click(self):
-        pass
+        try:
+            self.state.buy_machine()
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.set_status("购入加工器 #{}".format(len(self.state.machines)))
+            self._save()
+        self.refresh()
 
     def _on_expand_click(self):
-        pass
+        try:
+            self.state.expand_capacity()
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.set_status("牧场扩建到 {} 个位置".format(self.state.capacity))
+            self._save()
+        self.refresh()
 
     def _on_process_click(self, index: int):
-        pass
+        try:
+            self.state.process(index, self.clock())
+        except ValueError as exc:
+            self.set_status(str(exc))
+        else:
+            self.set_status("投料成功，{} 分钟后出奶酪".format(CHEESE_TIME // 60))
+            self._save()
+        self.refresh()
 
     def _on_process_all_click(self):
-        pass
+        started = self.state.process_all(self.clock())
+        if started:
+            self.set_status("启动了 {} 台加工器".format(started))
+            self._save()
+        else:
+            self.set_status("没有可投料的加工器（需空闲且库存 ≥ {} 牛奶）".format(
+                CHEESE_MILK_COST))
+        self.refresh()
 
     def _on_sell_click(self, item: str):
-        pass
+        name = {"milk": "牛奶", "cheese": "奶酪"}[item]
+        count = self.state.stock(item)
+        if count <= 0:
+            self.set_status("仓库没有{}".format(name))
+            return
+        got = self.state.sell_stock(item)
+        self.set_status("卖出{} ×{}，+{} 金币".format(name, count, got))
+        self._save()
+        self.refresh()
 
     def _on_sell_all_click(self):
-        pass
+        total = self.state.sell_all_stock()
+        if total:
+            self.set_status("全部卖出，+{} 金币".format(total))
+            self._save()
+        else:
+            self.set_status("仓库是空的")
+        self.refresh()
 
     # ---------- 保存与循环 ----------
 
