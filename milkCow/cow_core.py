@@ -105,6 +105,53 @@ class GameState:
         if now > self.settled_until:
             self.settled_until = now
 
+    def find_cow(self, cow_id: int) -> Optional[Cow]:
+        for cow in self.cows:
+            if cow.id == cow_id:
+                return cow
+        return None
+
+    def milk(self, cow_id: int, now: float) -> None:
+        self.catch_up(now)
+        cow = self.find_cow(cow_id)
+        if cow is None:
+            raise ValueError("没有这头牛")
+        if not udder_ready(cow, now):
+            raise ValueError("这头牛还没蓄满奶")
+        self.warehouse["milk"] = self.stock("milk") + 1
+        cow.last_milked_at = now
+
+    def milk_all(self, now: float) -> int:
+        milked = 0
+        for cow in list(self.cows):
+            if udder_ready(cow, now):
+                self.milk(cow.id, now)
+                milked += 1
+        return milked
+
+    def sell_stock(self, item: str) -> int:
+        prices = {"milk": MILK_PRICE, "cheese": CHEESE_PRICE}
+        if item not in prices:
+            raise ValueError("未知商品")
+        count = self.stock(item)
+        if count <= 0:
+            return 0
+        amount = count * prices[item]
+        self.coins += amount
+        self.total_income += amount
+        self.warehouse.pop(item, None)
+        return amount
+
+    def sell_all_stock(self) -> int:
+        total = 0
+        for item in ("milk", "cheese"):
+            total += self.sell_stock(item)
+        return total
+
+    def stock_value(self) -> int:
+        return (self.stock("milk") * MILK_PRICE
+                + self.stock("cheese") * CHEESE_PRICE)
+
 
 def free_slot_left(state: GameState) -> bool:
     """预留空位闸门：牛数 + 孕妇数 < 容量，才允许新生命入场。"""

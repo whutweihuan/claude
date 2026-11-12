@@ -54,5 +54,59 @@ class StageTests(unittest.TestCase):
         self.assertFalse(free_slot_left(s))  # 牛数 2 + 孕妇 1 = 3 > 容量 2
 
 
+class MilkTests(unittest.TestCase):
+    def setUp(self):
+        self.s = new_game(T0)
+
+    def test_milk_requires_full_udder(self):
+        with self.assertRaisesRegex(ValueError, "这头牛还没蓄满奶"):
+            self.s.milk(1, T0 + 1199)
+        self.s.milk(1, T0 + 1200)
+        self.assertEqual(self.s.warehouse["milk"], 1)
+
+    def test_milk_resets_timer(self):
+        self.s.milk(1, T0 + 1200)
+        with self.assertRaisesRegex(ValueError, "这头牛还没蓄满奶"):
+            self.s.milk(1, T0 + 2399)
+        self.s.milk(1, T0 + 2400)
+        self.assertEqual(self.s.stock("milk"), 2)
+
+    def test_milk_pregnant_cow_allowed(self):
+        self.s.cows[0].pregnant = True
+        coins = self.s.coins
+        self.s.milk(1, T0 + 1200)
+        self.assertEqual(self.s.stock("milk"), 1)
+        self.assertEqual(self.s.coins, coins)
+
+    def test_milk_all_counts_only_ready(self):
+        self.s.cows.append(make_cow(id=2, born_at=T0 - 10800, last_milked_at=T0))
+        self.s.cows.append(make_cow(id=3, born_at=T0 - 10800, last_milked_at=T0 + 600))
+        self.assertEqual(self.s.milk_all(T0 + 1200), 2)
+        self.assertEqual(self.s.stock("milk"), 2)
+
+    def test_milk_all_zero_is_legal(self):
+        self.assertEqual(self.s.milk_all(T0), 0)
+        self.assertEqual(self.s.stock("milk"), 0)
+
+    def test_milk_unknown_id_raises(self):
+        with self.assertRaisesRegex(ValueError, "没有这头牛"):
+            self.s.milk(42, T0 + 99999)
+
+    def test_sell_milk_adds_coins(self):
+        self.s.warehouse["milk"] = 3
+        got = self.s.sell_stock("milk")
+        self.assertEqual((got, self.s.coins, self.s.total_income, self.s.stock("milk")),
+                         (45, 245, 45, 0))
+
+    def test_sell_all_stock_totals(self):
+        self.s.warehouse.update({"milk": 2, "cheese": 1})
+        self.assertEqual(self.s.stock_value(), 105)
+        self.assertEqual(self.s.sell_all_stock(), 105)
+        self.assertEqual(self.s.coins, 305)
+        self.assertEqual(self.s.stock("milk"), 0)
+        self.assertEqual(self.s.stock("cheese"), 0)
+        self.assertEqual(self.s.sell_all_stock(), 0)  # 空仓返回 0 不报错
+
+
 if __name__ == "__main__":
     unittest.main()
