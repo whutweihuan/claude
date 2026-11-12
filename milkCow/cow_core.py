@@ -359,6 +359,8 @@ class GameState:
     def from_dict(cls, data: dict) -> "GameState":
         if not isinstance(data, dict):
             raise ValueError("存档格式不正确")
+        if data.get("version") != 1:
+            raise ValueError("存档版本不匹配")
         if not (_is_plain_int(data.get("coins")) and data["coins"] >= 0):
             raise ValueError("存档金币不合法")
         if not (_is_plain_int(data.get("capacity"))
@@ -397,6 +399,8 @@ class GameState:
                 last_milked_at=float(raw["last_milked_at"]), pregnant=pregnant,
                 due_at=float(raw["due_at"]), recovery_until=float(raw["recovery_until"]),
             ))
+        if cows and data["next_cow_id"] <= max(c.id for c in cows):
+            raise ValueError("存档牛编号与牛群冲突")
         raw_machines = data.get("machines")
         if not isinstance(raw_machines, list) or len(raw_machines) > MAX_MACHINES:
             raise ValueError("存档加工器不合法")
