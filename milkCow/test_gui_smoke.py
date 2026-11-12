@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """cow_gui 冒烟与布局测试。构建窗口用 start_loops=False，不进 mainloop。"""
 
+import subprocess
+import sys
 import tempfile
 import time
 import tkinter as tk
@@ -215,6 +217,142 @@ class GuiAnimationTests(unittest.TestCase):
         self.app.refresh()
         self.assertNotIn(new_id, self.app.positions)
         self.assertNotIn(new_id, self.app._targets)
+
+
+_LAYOUT_PROBE = r'''
+import sys, tempfile, time
+from pathlib import Path
+import tkinter.font as tkfont
+import cow_gui
+from cow_core import Cow, MILK_INTERVAL
+
+sys.stdout.reconfigure(encoding="utf-8")
+cow_gui._enable_dpi_awareness()
+app = cow_gui.CowApp(save_path=Path(tempfile.mkdtemp()) / "save.json",
+                     start_loops=False)
+now = time.time()
+s = app.state
+s.coins = 123456
+s.capacity = 6
+s.cows.append(Cow(id=s.next_cow_id, name="妞妞", born_at=now - 10800,
+                  last_milked_at=now - MILK_INTERVAL - 1)); s.next_cow_id += 1
+s.cows.append(Cow(id=s.next_cow_id, name="大壮", born_at=now - 10800,
+                  pregnant=True, due_at=now + 3600)); s.next_cow_id += 1
+s.cows.append(Cow(id=s.next_cow_id, name="团团", born_at=now - 10800,
+                  recovery_until=now + 900,
+                  last_milked_at=now - MILK_INTERVAL - 1)); s.next_cow_id += 1
+s.cows.append(Cow(id=s.next_cow_id, name="默默", born_at=now,
+                  last_milked_at=now)); s.next_cow_id += 1
+s.buy_machine(); s.buy_machine()
+s.warehouse.update({"milk": 1234, "cheese": 56})
+s.process(0, now)
+s.feed_count = 7
+s.expand_capacity()
+app.selected_id = 1
+app.refresh()
+app.update_idletasks()
+app.update()
+problems = []
+
+if app.winfo_reqwidth() > app.winfo_width():
+    problems.append("window req %d > width %d"
+                    % (app.winfo_reqwidth(), app.winfo_width()))
+if app.minsize()[0] < 1260 or app.minsize()[1] < 640:
+    problems.append("minsize %r" % (app.minsize(),))
+
+def widget_text(w):
+    keys = w.keys()
+    if "textvariable" in keys:
+        tv = str(w.cget("textvariable") or "")
+        if tv:
+            try:
+                return str(w.tk.globalgetvar(tv))
+            except Exception:
+                return ""
+    return str(w.cget("text") or "")
+
+def walk(w):
+    for child in w.winfo_children():
+        yield child
+        for got in walk(child):
+            yield got
+
+for widget in walk(app):
+    if widget.winfo_class() not in ("Label", "Button"):
+        continue
+    text = widget_text(widget)
+    if not text:
+        continue
+    need = tkfont.Font(font=widget.cget("font")).measure(text)
+    if need > widget.winfo_width():
+        problems.append("%s %r needs %d > %d"
+                        % (widget.winfo_class(), text, need, widget.winfo_width()))
+
+canvas = app.pasture
+cw, ch = canvas.winfo_width(), canvas.winfo_height()
+for item in canvas.find_all():
+    if canvas.type(item) != "text":
+        continue
+    bbox = canvas.bbox(item)
+    if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > cw or bbox[3] > ch:
+        problems.append("canvas text %r bbox %r outside %dx%d"
+                        % (canvas.itemcget(item, "text"), bbox, cw, ch))
+    if bbox[1] < 2:
+        problems.append("canvas text %r too close to top: %r"
+                        % (canvas.itemcget(item, "text"), bbox))
+
+app.destroy()
+if problems:
+    print("\n".join(problems))
+    sys.exit(1)
+'''
+
+
+class GuiLayoutTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.save_path = Path(self.tmp.name) / "save.json"
+        self.app = cow_gui.CowApp(save_path=self.save_path, start_loops=False)
+        self.app.update_idletasks()
+        self.app.update()
+
+    def tearDown(self):
+        self.app.destroy()
+        self.tmp.cleanup()
+
+    def _texts(self, widget):
+        found = []
+        for child in widget.winfo_children():
+            if child.winfo_class() == "Label":
+                tv = str(child.cget("textvariable") or "")
+                text = str(child.tk.globalgetvar(tv)) if tv else str(child.cget("text"))
+                if text:
+                    found.append((child, text))
+            found.extend(self._texts(child))
+        return found
+
+    def test_warehouse_labels_fit(self):
+        import tkinter.font as tkfont
+        for label, text in self._texts(self.app.warehouse_frame):
+            font = tkfont.Font(font=label.cget("font"))
+            self.assertLessEqual(
+                font.measure(text), label.winfo_width(),
+                "仓库文字 {!r} 需要 {}px，标签只有 {}px".format(
+                    text, font.measure(text), label.winfo_width()))
+
+    def test_window_and_minsize(self):
+        self.assertLessEqual(self.app.winfo_reqwidth(), self.app.winfo_width())
+        self.assertGreaterEqual(self.app.minsize()[0], 1260)
+
+    @unittest.skipUnless(sys.platform == "win32", "真实 DPI 布局测试仅限 Windows")
+    def test_layout_fits_with_real_dpi_awareness(self):
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-c", _LAYOUT_PROBE],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60, cwd=str(Path(__file__).resolve().parent),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
