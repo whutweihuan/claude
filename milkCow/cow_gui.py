@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """奶牛牧场桌面版（tkinter）。运行: python cow_gui.py"""
 
+import math
+import random
 import time
 import tkinter as tk
 from pathlib import Path
@@ -175,10 +177,16 @@ class PastureCanvas(tk.Canvas):
 
 
 class CowApp(tk.Tk):
+    WALK_X = (70.0, 690.0)
+    WALK_Y = (90.0, 380.0)
+    WALK_SPEEDS = {"calf": 32.0, "young": 26.0, "adult": 22.0}
+
     def __init__(self, save_path=None, start_loops: bool = True,
-                 clock=time.time):
+                 clock=time.time, anim_seed: int = 0):
         super().__init__()
         self.clock = clock
+        self._rng = random.Random(anim_seed)
+        self._targets: Dict[int, Dict[str, float]] = {}
         self.save_path = Path(save_path) if save_path else (
             Path(__file__).resolve().parent / "save.json")
         self.title("奶牛牧场")
@@ -205,6 +213,7 @@ class CowApp(tk.Tk):
         if start_loops:
             self.after(1000, self._tick)
             self.after(10000, self._autosave)
+            self.after(300, self._animate)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------- 布局 ----------
@@ -353,12 +362,49 @@ class CowApp(tk.Tk):
         for cow_id in list(self.positions):
             if cow_id not in alive:
                 del self.positions[cow_id]
+                self._targets.pop(cow_id, None)
         for cow in self.state.cows:
             if cow.id not in self.positions:
                 self.positions[cow.id] = self._initial_position(cow.id)
+            if cow.id not in self._targets:
+                tx, ty = self._random_target()
+                self._targets[cow.id] = {"tx": tx, "ty": ty, "dwell": 0.0}
 
     def _initial_position(self, cow_id: int) -> Tuple[float, float]:
         return (150.0 + (cow_id * 173) % 560, 150.0 + (cow_id * 97) % 200)
+
+    def _random_target(self) -> Tuple[float, float]:
+        return (self._rng.uniform(*self.WALK_X), self._rng.uniform(*self.WALK_Y))
+
+    # ---------- 走动动画（纯装饰：只读核心，不写状态、不进存档） ----------
+
+    def _animate_step(self, dt: float):
+        now = self.clock()
+        for cow in self.state.cows:
+            motion = self._targets.get(cow.id)
+            if motion is None or cow.id not in self.positions:
+                continue
+            x, y = self.positions[cow.id]
+            if motion["dwell"] > 0.0:
+                motion["dwell"] -= dt
+                if motion["dwell"] <= 0.0:
+                    motion["tx"], motion["ty"] = self._random_target()
+                continue
+            dx = motion["tx"] - x
+            dy = motion["ty"] - y
+            dist = math.hypot(dx, dy)
+            step = self.WALK_SPEEDS[stage_of(cow, now)] * dt
+            if dist <= step or dist == 0.0:
+                self.positions[cow.id] = (motion["tx"], motion["ty"])
+                motion["dwell"] = self._rng.uniform(2.0, 8.0)
+            else:
+                self.positions[cow.id] = (x + dx / dist * step,
+                                          y + dy / dist * step)
+        self.pasture.render(self.state, now, self.positions)
+
+    def _animate(self):
+        self._animate_step(0.3)
+        self.after(300, self._animate)
 
     def _update_warehouse(self):
         for key, name, price in (("milk", "牛奶", MILK_PRICE),

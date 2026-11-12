@@ -3,6 +3,7 @@
 
 import tempfile
 import time
+import tkinter as tk
 import unittest
 from pathlib import Path
 
@@ -139,6 +140,81 @@ class GuiInteractionTests(unittest.TestCase):
         self.app._on_cow_click(1)
         self.assertTrue(self.save_path.exists())
         self.assertIn("milk", self.save_path.read_text(encoding="utf-8"))
+
+
+def snapshot_core(s):
+    return (
+        s.coins, s.capacity,
+        sorted((c.id, c.born_at, c.fed_count, c.pregnant, c.due_at,
+                c.recovery_until, c.last_milked_at, c.name) for c in s.cows),
+        list(s.machines), dict(s.warehouse), s.feed_count,
+        s.total_births, s.total_income, s.next_cow_id,
+    )
+
+
+class GuiAnimationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.save_path = Path(self.tmp.name) / "save.json"
+        self.app = cow_gui.CowApp(save_path=self.save_path, start_loops=False,
+                                  anim_seed=7)
+        self.app.update_idletasks()
+
+    def tearDown(self):
+        try:
+            self.app.destroy()
+        except tk.TclError:
+            pass
+        self.tmp.cleanup()
+
+    def test_positions_advance_with_seed(self):
+        track_a = []
+        for _ in range(30):
+            self.app._animate_step(0.3)
+        track_a = dict(self.app.positions)
+        self.app.destroy()
+        app_b = cow_gui.CowApp(save_path=self.save_path, start_loops=False,
+                               anim_seed=7)
+        for _ in range(30):
+            app_b._animate_step(0.3)
+        self.assertEqual(track_a, dict(app_b.positions))
+        app_b.destroy()
+        for (x, y) in track_a.values():
+            self.assertTrue(60 <= x <= 705, "x 越界: {}".format(x))
+            self.assertTrue(80 <= y <= 395, "y 越界: {}".format(y))
+
+    def test_animation_moves_at_least_one_cow(self):
+        before = dict(self.app.positions)
+        for _ in range(30):
+            self.app._animate_step(0.3)
+        self.assertNotEqual(before, dict(self.app.positions))
+
+    def test_animation_does_not_mutate_state(self):
+        snap = snapshot_core(self.app.state)
+        for _ in range(20):
+            self.app._animate_step(0.3)
+        self.assertEqual(snap, snapshot_core(self.app.state))
+
+    def test_closed_animation_leaves_cow_still(self):
+        before = dict(self.app.positions)
+        self.app.update()
+        self.assertEqual(before, dict(self.app.positions))
+
+    def test_sold_cow_position_removed(self):
+        import time as _time
+        from cow_core import Cow
+        s = self.app.state
+        s.cows.append(Cow(id=s.next_cow_id, name="大壮",
+                          born_at=_time.time() - 10800,
+                          last_milked_at=_time.time()))
+        new_id = s.next_cow_id
+        s.next_cow_id += 1
+        self.app.refresh()
+        self.assertIn(new_id, self.app.positions)
+        s.sell_cow(new_id, _time.time())
+        self.app.refresh()
+        self.assertNotIn(new_id, self.app.positions)
+        self.assertNotIn(new_id, self.app._targets)
 
 
 if __name__ == "__main__":
