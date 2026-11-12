@@ -101,9 +101,37 @@ class GameState:
         return self.warehouse.get(item, 0)
 
     def catch_up(self, now: float) -> None:
-        """把所有时间驱动事件结算到 now（任务 5/6 扩展）。"""
+        """把所有时间驱动事件结算到 now（任务 6 扩展繁殖链）。"""
+        self._settle_machines(now)
         if now > self.settled_until:
             self.settled_until = now
+
+    def _settle_machines(self, now: float) -> None:
+        for i, started in enumerate(self.machines):
+            if started is not None and started + CHEESE_TIME <= now:
+                self.warehouse["cheese"] = self.stock("cheese") + 1
+                self.machines[i] = None
+
+    def process(self, machine_index: int, now: float) -> None:
+        self.catch_up(now)
+        if not 0 <= machine_index < len(self.machines):
+            raise ValueError("没有这台加工器")
+        if self.machines[machine_index] is not None:
+            raise ValueError("加工器正忙")
+        if self.stock("milk") < CHEESE_MILK_COST:
+            raise ValueError("牛奶不够")
+        self.warehouse["milk"] = self.stock("milk") - CHEESE_MILK_COST
+        self.machines[machine_index] = now
+
+    def process_all(self, now: float) -> int:
+        started = 0
+        for i in range(len(self.machines)):
+            try:
+                self.process(i, now)
+            except ValueError:
+                continue
+            started += 1
+        return started
 
     def find_cow(self, cow_id: int) -> Optional[Cow]:
         for cow in self.cows:

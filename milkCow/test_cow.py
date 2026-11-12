@@ -242,5 +242,49 @@ class ShopTests(unittest.TestCase):
             self.s.expand_capacity()
 
 
+class CheeseTests(unittest.TestCase):
+    def setUp(self):
+        self.s = new_game(T0)
+        self.s.coins = 100000
+        self.s.buy_machine()
+        self.s.warehouse["milk"] = 5
+
+    def test_process_consumes_and_busy(self):
+        self.s.process(0, T0)
+        self.assertEqual((self.s.stock("milk"), self.s.machines[0]), (2, T0))
+        with self.assertRaisesRegex(ValueError, "加工器正忙"):
+            self.s.process(0, T0 + 60)
+
+    def test_cheese_settles_on_catch_up(self):
+        self.s.process(0, T0)
+        self.s.catch_up(T0 + 1199)
+        self.assertEqual(self.s.stock("cheese"), 0)
+        self.assertEqual(self.s.machines[0], T0)
+        self.s.catch_up(T0 + 1200)
+        self.assertEqual(self.s.stock("cheese"), 1)
+        self.assertIsNone(self.s.machines[0])
+
+    def test_cheese_sale_value(self):
+        self.s.warehouse["cheese"] = 2
+        self.assertEqual(self.s.sell_stock("cheese"), 150)
+        self.assertEqual(self.s.coins, 100000 - 300 + 150)
+
+    def test_process_all_fills_machines(self):
+        self.s.buy_machine()
+        self.s.warehouse["milk"] = 7
+        self.assertEqual(self.s.process_all(T0), 2)
+        self.assertEqual(self.s.stock("milk"), 1)
+
+    def test_process_requires_milk(self):
+        self.s.warehouse["milk"] = 2
+        with self.assertRaisesRegex(ValueError, "牛奶不够"):
+            self.s.process(0, T0)
+        self.assertIsNone(self.s.machines[0])
+
+    def test_process_unknown_machine(self):
+        with self.assertRaisesRegex(ValueError, "没有这台加工器"):
+            self.s.process(5, T0)
+
+
 if __name__ == "__main__":
     unittest.main()
