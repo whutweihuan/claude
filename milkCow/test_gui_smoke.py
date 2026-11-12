@@ -8,6 +8,7 @@ import time
 import tkinter as tk
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import cow_gui
 from cow_core import MILK_INTERVAL
@@ -143,6 +144,24 @@ class GuiInteractionTests(unittest.TestCase):
         self.assertTrue(self.save_path.exists())
         self.assertIn("milk", self.save_path.read_text(encoding="utf-8"))
 
+    def test_feed_button_shows_disable_reason(self):
+        self.app.selected_id = 1  # 花花是成年牛
+        self.app.refresh()
+        self.assertIn("已成年", self.app.feed_button.cget("text"))
+        self.assertEqual(str(self.app.feed_button.cget("state")), "disabled")
+
+    def test_feed_button_ready_for_fed_calf(self):
+        from cow_core import Cow
+        s = self.app.state
+        s.cows.append(Cow(id=s.next_cow_id, name="团团",
+                          born_at=time.time(), last_milked_at=time.time()))
+        s.next_cow_id += 1
+        s.feed_count = 1
+        self.app.selected_id = s.next_cow_id - 1
+        self.app.refresh()
+        self.assertIn("背包 1 份", self.app.feed_button.cget("text"))
+        self.assertEqual(str(self.app.feed_button.cget("state")), "normal")
+
 
 def snapshot_core(s):
     return (
@@ -217,6 +236,52 @@ class GuiAnimationTests(unittest.TestCase):
         self.app.refresh()
         self.assertNotIn(new_id, self.app.positions)
         self.assertNotIn(new_id, self.app._targets)
+
+
+class GuiPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.save_path = Path(self.tmp.name) / "save.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _build(self):
+        app = cow_gui.CowApp(save_path=self.save_path, start_loops=False)
+        app.update_idletasks()
+        return app
+
+    def test_corrupt_save_shows_warning(self):
+        app = self._build()
+        app.destroy()
+        self.save_path.write_text("{ 坏档", encoding="utf-8")
+        app2 = self._build()
+        try:
+            self.assertIn("存档损坏", app2.status_var.get())
+            self.assertEqual(app2.state.coins, 200)
+            self.assertTrue(list(self.save_path.parent.glob("save.corrupt-*.json")))
+        finally:
+            app2.destroy()
+
+    def test_readonly_mode_does_not_overwrite(self):
+        app = self._build()
+        app.state.coins = 999
+        app._save()
+        app.destroy()
+        original = self.save_path.read_text(encoding="utf-8")
+        with mock.patch.object(Path, "open", side_effect=PermissionError("被占用")):
+            app2 = cow_gui.CowApp(save_path=self.save_path, start_loops=False)
+        try:
+            self.assertIn("读取存档失败", app2.status_var.get())
+            self.assertTrue(app2._readonly)
+            app2._on_close()
+        finally:
+            try:
+                app2.destroy()
+            except tk.TclError:
+                pass
+        self.assertEqual(self.save_path.read_text(encoding="utf-8"), original)
+        self.assertFalse(list(self.save_path.parent.glob("save.corrupt-*.json")))
 
 
 _LAYOUT_PROBE = r'''

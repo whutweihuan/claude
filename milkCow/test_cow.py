@@ -344,6 +344,15 @@ class BreedingTests(unittest.TestCase):
         self.assertEqual(b.total_births, 3)
         self.assertFalse(any(c.pregnant for c in b.cows))
 
+    def test_thirty_day_offline_matches_hourly_stepping(self):
+        a = new_game(T0)
+        b = new_game(T0)
+        for k in range(1, 721):  # 在线：每小时一步，共 30 天
+            a.catch_up(T0 + k * 3600.0)
+        b.catch_up(T0 + 30 * 86400.0)  # 离线：一跳 30 天
+        self.assertEqual(snapshot(a), snapshot(b))
+        self.assertLessEqual(len(b.cows), b.capacity)  # 任何时刻不超容
+
     def test_idempotent_catch_up(self):
         s = new_game(T0)
         s.catch_up(T0 + 50 * 3600.0)

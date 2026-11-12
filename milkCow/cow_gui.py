@@ -10,10 +10,10 @@ from typing import Dict, List, Tuple
 
 from cow_core import (
     CALF_PRICE, CAPACITY_PRICES, CHEESE_MILK_COST, CHEESE_PRICE, CHEESE_TIME,
-    COW_SELL_PRICES, FEED_PRICE, GESTATION, MAX_CAPACITY, MAX_MACHINES,
-    MACHINE_PRICES, MILK_INTERVAL, MILK_PRICE, POSTPARTUM, SaveUnreadableError,
-    adult_at, free_slot_left, load_state, new_game, save_state, stage_of,
-    udder_ready,
+    COW_SELL_PRICES, FEED_COOLDOWN, FEED_MAX, FEED_PRICE, MAX_CAPACITY,
+    MAX_MACHINES, MACHINE_PRICES, MILK_INTERVAL, MILK_PRICE,
+    SaveUnreadableError, adult_at, free_slot_left, load_state, new_game,
+    save_state, stage_of, udder_ready,
 )
 
 BG = "#F6F1E7"
@@ -199,8 +199,9 @@ class CowApp(tk.Tk):
         self.positions: Dict[int, Tuple[float, float]] = {}
         self.machine_rows: List = []
         self.load_error = None
+        load_warning = None
         try:
-            self.state, _ = load_state(self.save_path)
+            self.state, load_warning = load_state(self.save_path)
         except SaveUnreadableError as exc:
             self.state = new_game(self.clock())
             self._readonly = True
@@ -210,6 +211,8 @@ class CowApp(tk.Tk):
         self.refresh()
         if self.load_error:
             self.set_status(self.load_error, seconds=8)
+        elif load_warning:
+            self.set_status(load_warning, seconds=8)
         if start_loops:
             self.after(1000, self._tick)
             self.after(10000, self._autosave)
@@ -419,6 +422,18 @@ class CowApp(tk.Tk):
             text="全部卖出（{}）".format(value),
             state="normal" if value > 0 else "disabled")
 
+    def _feed_disable_reason(self, cow, now: float):
+        """置灰原因写进按钮文字（规格 §7.5）；None 表示可以喂。"""
+        if stage_of(cow, now) == "adult":
+            return "已成年"
+        if cow.fed_count >= FEED_MAX:
+            return "已喂满"
+        if now - cow.last_fed_at < FEED_COOLDOWN:
+            return "冷却中"
+        if self.state.feed_count <= 0:
+            return "无饲料"
+        return None
+
     def _update_action(self, now: float):
         cow = None
         if self.selected_id is not None:
@@ -454,9 +469,14 @@ class CowApp(tk.Tk):
         self.milk_button.configure(
             state="normal" if (stage == "adult" and udder_ready(cow, now))
             else "disabled")
-        self.feed_button.configure(
-            text="喂食（背包 {} 份）".format(self.state.feed_count),
-            state="normal" if self.state.can_feed(cow.id, now) else "disabled")
+        reason = self._feed_disable_reason(cow, now)
+        if reason is None:
+            self.feed_button.configure(
+                text="喂食（背包 {} 份）".format(self.state.feed_count),
+                state="normal")
+        else:
+            self.feed_button.configure(
+                text="喂食（{}）".format(reason), state="disabled")
         self.sell_cow_button.configure(
             text="卖牛 {}".format(COW_SELL_PRICES[stage]), state="normal")
 
