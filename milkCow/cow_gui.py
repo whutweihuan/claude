@@ -29,6 +29,8 @@ GREEN = "#4F8F3F"
 HIGHLIGHT = "#E2A33B"
 COW_WHITE = "#F4F1EA"
 COW_BLACK = "#3A3A3A"
+COW_NOSE = "#E3AEB4"
+COW_UDDE = "#F4C6CC"
 HEART_PINK = "#E87FA0"
 MILK_WHITE = "#FFFFFF"
 
@@ -95,66 +97,127 @@ class PastureCanvas(tk.Canvas):
                 fill=GRASS_DARK, outline="", tags=("scenery",),
             )
 
-    def render(self, state, now: float, positions: Dict[int, Tuple[float, float]]):
+    def render(self, state, now: float, positions: Dict[int, Tuple[float, float]],
+               facings=None):
         self.delete("cow")
+        facings = facings or {}
         for cow in state.cows:
             x, y = positions.get(cow.id, (40.0, 40.0))
-            self._draw_cow(cow, x, y, stage_of(cow, now),
-                           cow.pregnant, udder_ready(cow, now))
+            self._draw_cow(cow, x, y, stage_of(cow, now), cow.pregnant,
+                           udder_ready(cow, now), facings.get(cow.id, 1))
+
+    @staticmethod
+    def _box(cx, cy, w, h, cut):
+        """带切角的长方体轮廓点（配合 smooth 得到圆角矩形）。"""
+        return [
+            cx - w / 2 + cut, cy - h / 2, cx + w / 2 - cut, cy - h / 2,
+            cx + w / 2, cy - h / 2 + cut, cx + w / 2, cy + h / 2 - cut,
+            cx + w / 2 - cut, cy + h / 2, cx - w / 2 + cut, cy + h / 2,
+            cx - w / 2, cy + h / 2 - cut, cx - w / 2, cy - h / 2 + cut,
+        ]
 
     def _draw_cow(self, cow, x: float, y: float, stage: str,
-                  pregnant: bool, full: bool):
+                  pregnant: bool, full: bool, facing: int = 1):
+        """侧视奶牛：平背平腹的长方形躯干、方头带鼻吻、直立四肢带蹄、尾梢。"""
         scale = {"calf": 0.55, "young": 0.75, "adult": 1.0}[stage]
         tags = ("cow", "cow-{}".format(cow.id))
-        bw, bh = 56 * scale, 26 * scale
-        leg = 10 * scale
-        for fx in (-0.30, -0.12, 0.12, 0.30):
-            self.create_line(
-                x + fx * bw, y + bh / 2, x + fx * bw, y + bh / 2 + leg,
-                fill=COW_BLACK, width=max(1, int(2 * scale)), tags=tags,
-            )
-        self.create_line(
-            x - bw / 2, y - bh * 0.15, x - bw / 2 - 7 * scale, y + bh * 0.35,
-            fill=COW_BLACK, width=max(1, int(2 * scale)), tags=tags,
-        )
-        self.create_oval(
-            x - bw / 2, y - bh / 2, x + bw / 2, y + bh / 2,
-            fill=COW_WHITE, outline=COW_BLACK, width=2, tags=tags,
-        )
-        if cow.id % 2 == 0:
-            self.create_oval(
-                x - 0.30 * bw, y - 0.34 * bh, x - 0.02 * bw, y + 0.30 * bh,
-                fill=COW_BLACK, outline="", tags=tags,
-            )
+        bw, bh = 58.0 * scale, 30.0 * scale
+        cut = 8.0 * scale
+        leg_h = 12.0 * scale
+
+        def px(lx: float) -> float:
+            return x + lx * facing
+
+        # 后腿（先画，乳房随后叠在其上）
+        for fx in (-0.30, -0.15):
+            a, b = sorted((px(fx * bw - 2.6 * scale), px(fx * bw + 2.6 * scale)))
+            self.create_rectangle(a, y + bh / 2 - 4 * scale, b,
+                                  y + bh / 2 + leg_h, fill=COW_WHITE,
+                                  outline=COW_BLACK, tags=tags)
+            self.create_rectangle(a, y + bh / 2 + leg_h - 3 * scale, b,
+                                  y + bh / 2 + leg_h, fill=COW_BLACK,
+                                  outline="", tags=tags)
+        # 乳房（仅成年牛）
+        if stage == "adult":
+            a, b = sorted((px(0.02 * bw), px(0.18 * bw)))
+            self.create_oval(a, y + bh * 0.40, b, y + bh * 0.64,
+                             fill=COW_UDDE, outline="#D69A9A", tags=tags)
+        # 前腿
+        for fx in (0.18, 0.33):
+            a, b = sorted((px(fx * bw - 2.6 * scale), px(fx * bw + 2.6 * scale)))
+            self.create_rectangle(a, y + bh / 2 - 4 * scale, b,
+                                  y + bh / 2 + leg_h, fill=COW_WHITE,
+                                  outline=COW_BLACK, tags=tags)
+            self.create_rectangle(a, y + bh / 2 + leg_h - 3 * scale, b,
+                                  y + bh / 2 + leg_h, fill=COW_BLACK,
+                                  outline="", tags=tags)
+        # 躯干：平背平腹、切角圆角的长方形
+        self.create_polygon(self._box(x, y, bw, bh, cut), smooth=True,
+                            fill=COW_WHITE, outline=COW_BLACK, width=2, tags=tags)
+        # 黑白花斑（按 id 三种排布，全部落在躯干轮廓内）
+        variant = cow.id % 3
+        if variant == 0:
+            a, b = sorted((px(-0.28 * bw), px(0.02 * bw)))
+            self.create_oval(a, y - 0.40 * bh, b, y + 0.02 * bh,
+                             fill=COW_BLACK, outline="", tags=tags)
+            a, b = sorted((px(0.10 * bw), px(0.36 * bw)))
+            self.create_oval(a, y + 0.04 * bh, b, y + 0.38 * bh,
+                             fill=COW_BLACK, outline="", tags=tags)
+        elif variant == 1:
+            a, b = sorted((px(-0.40 * bw), px(-0.14 * bw)))
+            self.create_oval(a, y - 0.26 * bh, b, y + 0.10 * bh,
+                             fill=COW_BLACK, outline="", tags=tags)
+            a, b = sorted((px(0.08 * bw), px(0.38 * bw)))
+            self.create_oval(a, y - 0.40 * bh, b, y - 0.06 * bh,
+                             fill=COW_BLACK, outline="", tags=tags)
         else:
-            self.create_oval(
-                x + 0.05 * bw, y - 0.30 * bh, x + 0.32 * bw, y + 0.24 * bh,
-                fill=COW_BLACK, outline="", tags=tags,
-            )
-        self.create_oval(
-            x - 0.10 * bw, y + 0.02 * bh, x + 0.12 * bw, y + 0.42 * bh,
-            fill=COW_BLACK, outline="", tags=tags,
-        )
-        hx = x + bw / 2 + 7 * scale
-        self.create_oval(
-            hx - 7 * scale, y - 11 * scale, hx + 7 * scale, y + 2 * scale,
-            fill=COW_WHITE, outline=COW_BLACK, width=2, tags=tags,
-        )
-        self.create_oval(
-            hx - 3 * scale, y - 15 * scale, hx + 2 * scale, y - 10 * scale,
-            fill=COW_BLACK, outline="", tags=tags,
-        )
-        self.create_oval(
-            hx + 1 * scale, y - 8 * scale, hx + 3 * scale, y - 6 * scale,
-            fill=COW_BLACK, outline="", tags=tags,
-        )
-        marker_y = y - bh / 2 - 20 * scale
+            a, b = sorted((px(-0.14 * bw), px(0.14 * bw)))
+            self.create_oval(a, y - 0.40 * bh, b, y + 0.16 * bh,
+                             fill=COW_BLACK, outline="", tags=tags)
+            a, b = sorted((px(0.24 * bw), px(0.42 * bw)))
+            self.create_oval(a, y + 0.02 * bh, b, y + 0.34 * bh,
+                             fill=COW_BLACK, outline="", tags=tags)
+        # 尾巴：沿臀部下垂带毛梢
+        tx0 = px(-bw / 2 + 1.5 * scale)
+        self.create_line(tx0, y - bh * 0.30, px(-bw / 2 - 2 * scale), y + bh * 0.12,
+                         px(-bw / 2 - 1 * scale), y + bh * 0.38,
+                         fill=COW_BLACK, width=max(1, int(2.2 * scale)), tags=tags)
+        ta, tb = sorted((px(-bw / 2 - 4.5 * scale), px(-bw / 2 + 0.5 * scale)))
+        self.create_oval(ta, y + bh * 0.34, tb, y + bh * 0.58,
+                         fill=COW_BLACK, outline="", tags=tags)
+        # 头：方脸、宽鼻吻、耳朵平展
+        hw, hh = 21.0 * scale, 25.0 * scale
+        hx = px(bw / 2 + 8 * scale)
+        hy = y - bh / 2 + 11 * scale
+        self.create_polygon(self._box(hx, hy, hw, hh, 5 * scale), smooth=True,
+                            fill=COW_WHITE, outline=COW_BLACK, width=2, tags=tags)
+        mw, mh = 15.0 * scale, 11.0 * scale
+        mx = px(bw / 2 + 14.0 * scale)
+        my = hy + hh / 2 - mh / 2 - 1 * scale
+        self.create_polygon(self._box(mx, my, mw, mh, 3 * scale), smooth=True,
+                            fill=COW_NOSE, outline="#B7878C", width=1, tags=tags)
+        for nx in (-3.6, 3.6):
+            a, b = sorted((px(bw / 2 + 14.0 * scale + nx * scale) - 1.4 * scale,
+                           px(bw / 2 + 14.0 * scale + nx * scale) + 1.4 * scale))
+            self.create_oval(a, my + 1.5 * scale, b, my + 4.2 * scale,
+                             fill=COW_BLACK, outline="", tags=tags)
+        for ex in (-11.5, 11.5):
+            a, b = sorted((px(bw / 2 + 8 * scale + ex * scale) - 4.5 * scale,
+                           px(bw / 2 + 8 * scale + ex * scale) + 4.5 * scale))
+            self.create_oval(a, hy - hh / 2 - 1 * scale, b, hy - hh / 2 + 3.5 * scale,
+                             fill=COW_BLACK, outline="", tags=tags)
+        ea, eb = sorted((px(bw / 2 + 11.5 * scale) - 1.8 * scale,
+                         px(bw / 2 + 11.5 * scale) + 1.8 * scale))
+        self.create_oval(ea, hy - 4 * scale, eb, hy - 0.5 * scale,
+                         fill=COW_BLACK, outline="", tags=tags)
+        # 标记与名字
+        marker_y = y - bh / 2 - 22 * scale
         if pregnant:
-            self._heart(x - 10 * scale, marker_y, scale)
+            self._heart(px(-10 * scale), marker_y, scale)
         if full:
-            self._drop(x + 12 * scale, marker_y, scale)
+            self._drop(px(12 * scale), marker_y, scale)
         self.create_text(
-            x, y + bh / 2 + leg + 4, text=cow.name, anchor="n",
+            x, y + bh / 2 + leg_h + 4, text=cow.name, anchor="n",
             font=FONT_SMALL, fill="#2F4A24", tags=tags,
         )
 
@@ -333,7 +396,7 @@ class CowApp(tk.Tk):
         ready = sum(1 for c in self.state.cows if udder_ready(c, now))
         self._update_header(ready, now)
         self._sync_positions()
-        self.pasture.render(self.state, now, self.positions)
+        self.pasture.render(self.state, now, self.positions, self._facings())
         self._update_warehouse()
         self._update_action(now)
         self._update_shop()
@@ -376,6 +439,18 @@ class CowApp(tk.Tk):
     def _initial_position(self, cow_id: int) -> Tuple[float, float]:
         return (150.0 + (cow_id * 173) % 560, 150.0 + (cow_id * 97) % 200)
 
+    def _facings(self) -> Dict[int, int]:
+        """朝向跟随当前行走目标；停留/无目标时保持朝右。"""
+        facings = {}
+        for cow in self.state.cows:
+            motion = self._targets.get(cow.id)
+            pos = self.positions.get(cow.id)
+            if motion is None or pos is None:
+                facings[cow.id] = 1
+            else:
+                facings[cow.id] = 1 if motion["tx"] >= pos[0] else -1
+        return facings
+
     def _random_target(self) -> Tuple[float, float]:
         return (self._rng.uniform(*self.WALK_X), self._rng.uniform(*self.WALK_Y))
 
@@ -403,7 +478,7 @@ class CowApp(tk.Tk):
             else:
                 self.positions[cow.id] = (x + dx / dist * step,
                                           y + dy / dist * step)
-        self.pasture.render(self.state, now, self.positions)
+        self.pasture.render(self.state, now, self.positions, self._facings())
 
     def _animate(self):
         self._animate_step(0.3)
