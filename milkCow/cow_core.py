@@ -152,6 +152,70 @@ class GameState:
         return (self.stock("milk") * MILK_PRICE
                 + self.stock("cheese") * CHEESE_PRICE)
 
+    def next_unused_name(self) -> str:
+        used = {cow.name for cow in self.cows}
+        for name in NAME_POOL:
+            if name not in used:
+                return name
+        return "小牛 {}".format(self.next_cow_id)
+
+    def conception_pass(self, at: float) -> None:
+        """空位补位：把可孕牛按先后顺序填入空位。任务 6 实现。"""
+
+    def buy_calf(self, now: float) -> int:
+        self.catch_up(now)
+        if not free_slot_left(self):
+            raise ValueError("牧场满了")
+        if self.coins < CALF_PRICE:
+            raise ValueError("金币不够")
+        self.coins -= CALF_PRICE
+        cow = Cow(
+            id=self.next_cow_id,
+            name=self.next_unused_name(),
+            born_at=now,
+            last_milked_at=now,
+        )
+        self.next_cow_id += 1
+        self.cows.append(cow)
+        return cow.id
+
+    def sell_cow(self, cow_id: int, now: float) -> int:
+        self.catch_up(now)
+        cow = self.find_cow(cow_id)
+        if cow is None:
+            raise ValueError("没有这头牛")
+        price = COW_SELL_PRICES[stage_of(cow, now)]
+        self.cows.remove(cow)
+        self.coins += price
+        self.total_income += price
+        self.conception_pass(now)  # 腾位即补位
+        return price
+
+    def buy_feed(self) -> int:
+        if self.coins < FEED_PRICE:
+            raise ValueError("金币不够")
+        self.coins -= FEED_PRICE
+        self.feed_count += 1
+        return self.feed_count
+
+    def buy_machine(self) -> None:
+        if len(self.machines) >= MAX_MACHINES:
+            raise ValueError("加工器已达上限")
+        price = MACHINE_PRICES[len(self.machines)]
+        if self.coins < price:
+            raise ValueError("金币不够")
+        self.coins -= price
+        self.machines.append(None)
+
+    def expand_capacity(self) -> None:
+        if self.capacity >= MAX_CAPACITY:
+            raise ValueError("牧场已扩建到上限")
+        price = CAPACITY_PRICES[self.capacity - INITIAL_CAPACITY]
+        if self.coins < price:
+            raise ValueError("金币不够")
+        self.coins -= price
+        self.capacity += 1
+
     def can_feed(self, cow_id: int, now: float) -> bool:
         cow = self.find_cow(cow_id)
         if cow is None or stage_of(cow, now) == "adult":

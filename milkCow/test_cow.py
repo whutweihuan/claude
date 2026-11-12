@@ -151,5 +151,96 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(self.s.coins, coins)
 
 
+class ShopTests(unittest.TestCase):
+    def setUp(self):
+        self.s = new_game(T0)
+
+    def test_buy_calf(self):
+        cow_id = self.s.buy_calf(T0)
+        self.assertEqual(self.s.coins, 50)
+        calf = self.s.find_cow(cow_id)
+        self.assertEqual((calf.born_at, stage_of(calf, T0), calf.pregnant),
+                         (T0, "calf", False))
+        self.assertEqual(self.s.next_cow_id, 3)
+        self.assertEqual(calf.name, "妞妞")  # 名字池第一个未占用
+
+    def test_buy_calf_gate_full(self):
+        self.s.capacity = 1
+        with self.assertRaisesRegex(ValueError, "牧场满了"):
+            self.s.buy_calf(T0)
+
+    def test_buy_calf_reservation_counts_pregnant(self):
+        self.s.capacity = 2
+        self.s.cows[0].pregnant = True
+        with self.assertRaisesRegex(ValueError, "牧场满了"):
+            self.s.buy_calf(T0)
+
+    def test_buy_calf_insufficient_coins(self):
+        self.s.coins = 10
+        with self.assertRaisesRegex(ValueError, "金币不够"):
+            self.s.buy_calf(T0)
+
+    def test_sell_price_by_stage(self):
+        self.s.cows.append(make_cow(id=2, born_at=T0))            # calf
+        self.s.cows.append(make_cow(id=3, born_at=T0 - 50 * 60))  # young
+        self.assertEqual(self.s.sell_cow(2, T0), 80)
+        self.assertEqual(self.s.sell_cow(3, T0), 160)
+        self.assertEqual(self.s.sell_cow(1, T0), 350)
+        self.assertEqual(self.s.coins, 790)
+        self.assertEqual(self.s.total_income, 590)
+        self.assertEqual(len(self.s.cows), 0)
+
+    def test_sell_unknown_cow(self):
+        with self.assertRaisesRegex(ValueError, "没有这头牛"):
+            self.s.sell_cow(42, T0)
+
+    def test_sell_pregnant_cow_removes_fetus(self):
+        self.s.cows[0].pregnant = True
+        self.s.cows[0].due_at = T0 + 3600
+        self.s.sell_cow(1, T0)
+        self.assertEqual(len(self.s.cows), 0)
+        self.s.catch_up(T0 + 7200)
+        self.assertEqual(len(self.s.cows), 0)  # 不会凭空生产
+
+    def test_sell_opens_reservation_slot(self):
+        self.s.capacity = 2
+        self.s.cows.append(make_cow(id=2, pregnant=True, due_at=T0 + 3600))
+        self.assertFalse(free_slot_left(self.s))
+        self.s.sell_cow(2, T0)
+        self.assertTrue(free_slot_left(self.s))
+
+    def test_buy_feed(self):
+        self.assertEqual(self.s.buy_feed(), 1)  # 返回背包份数
+        self.assertEqual((self.s.coins, self.s.feed_count), (175, 1))
+        self.s.coins = 10
+        with self.assertRaisesRegex(ValueError, "金币不够"):
+            self.s.buy_feed()
+
+    def test_machine_prices_sequence(self):
+        self.s.coins = 100000
+        self.s.buy_machine()
+        self.assertEqual((self.s.coins, self.s.machines), (99700, [None]))
+        self.s.buy_machine()
+        self.assertEqual(self.s.coins, 99000)
+        self.s.buy_machine()
+        self.assertEqual(self.s.coins, 97500)
+        with self.assertRaisesRegex(ValueError, "加工器已达上限"):
+            self.s.buy_machine()
+
+    def test_expand_prices_sequence(self):
+        self.s.coins = 100000
+        for _ in range(8):
+            self.s.expand_capacity()
+        self.assertEqual(self.s.capacity, 12)
+        self.assertEqual(self.s.coins, 100000 - 13000)  # 200+400+700+1000+1500+2200+3000+4000
+        with self.assertRaisesRegex(ValueError, "已扩建到上限"):
+            self.s.expand_capacity()
+
+    def test_expand_insufficient_coins(self):
+        self.s.coins = 10
+        with self.assertRaisesRegex(ValueError, "金币不够"):
+            self.s.expand_capacity()
+
+
 if __name__ == "__main__":
     unittest.main()
