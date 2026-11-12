@@ -393,6 +393,22 @@ class BreedingTests(unittest.TestCase):
         s.catch_up(T0 + 4 * 3600)  # 超容 → 不再受孕
         self.assertEqual(len(s.cows), 4)
 
+    def test_legal_chain_to_exact_capacity(self):
+        # 审查重点 2 的合法构造：两头牛经闸门先后受孕、同刻生产、恰好满员
+        s = new_game(T0)
+        adult = make_cow(id=2, name="团团", born_at=T0 - 10800, last_milked_at=T0)
+        s.cows.append(adult)
+        s.next_cow_id = 3
+        s.catch_up(T0)
+        self.assertTrue(s.cows[0].pregnant and adult.pregnant)
+        s.catch_up(T0 + 3600)
+        self.assertEqual(len(s.cows), 4)
+        self.assertEqual([c.name for c in s.cows], ["花花", "团团", "妞妞", "大壮"])
+        for step in range(1, 25):  # 此后 12 小时逐步推进：不超容、不再受孕
+            s.catch_up(T0 + step * 1800.0)
+            self.assertLessEqual(len(s.cows), s.capacity)
+        self.assertFalse(any(c.pregnant for c in s.cows))
+
     def test_time_rollback_no_crash(self):
         s = new_game(T0)
         s.catch_up(T0 + 7200)
@@ -469,6 +485,24 @@ class SaveTests(unittest.TestCase):
                 s, msg = load_state(self.path)
                 self.assertIn("存档损坏", msg)
                 self.assertEqual((s.coins, s.capacity, len(s.cows)), (200, 4, 1))
+
+    def test_version_mismatch_is_corrupt(self):
+        base = self._rich_state().to_dict()
+        for bad_version in (2, "a", None):  # None = 字段缺失
+            data = {k: v for k, v in base.items() if k != "version"}
+            if bad_version is not None:
+                data["version"] = bad_version
+            self._write_raw(data)
+            with self.subTest(v=bad_version):
+                s, msg = load_state(self.path)
+                self.assertIn("存档损坏", msg)
+
+    def test_next_cow_id_conflict_is_corrupt(self):
+        data = self._rich_state().to_dict()
+        data["next_cow_id"] = 1  # 牛群已有 id 1/2，新生牛会撞号
+        self._write_raw(data)
+        s, msg = load_state(self.path)
+        self.assertIn("存档损坏", msg)
 
     def test_unknown_keys_ignored(self):
         data = self._rich_state().to_dict()

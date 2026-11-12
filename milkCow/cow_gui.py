@@ -10,10 +10,10 @@ from typing import Dict, List, Tuple
 
 from cow_core import (
     CALF_PRICE, CAPACITY_PRICES, CHEESE_MILK_COST, CHEESE_PRICE, CHEESE_TIME,
-    COW_SELL_PRICES, FEED_COOLDOWN, FEED_MAX, FEED_PRICE, MAX_CAPACITY,
-    MAX_MACHINES, MACHINE_PRICES, MILK_INTERVAL, MILK_PRICE,
-    SaveUnreadableError, adult_at, free_slot_left, load_state, new_game,
-    save_state, stage_of, udder_ready,
+    COW_SELL_PRICES, FEED_COOLDOWN, FEED_CREDIT, FEED_MAX, FEED_PRICE,
+    GROWTH_YOUNG, INITIAL_CAPACITY, MAX_CAPACITY, MAX_MACHINES, MACHINE_PRICES,
+    MILK_INTERVAL, MILK_PRICE, SaveUnreadableError, adult_at, free_slot_left,
+    load_state, new_game, ready_at, save_state, stage_of, udder_ready,
 )
 
 BG = "#F6F1E7"
@@ -21,6 +21,8 @@ HEADER_BG = "#E9DFC9"
 CARD_BG = "#EFE6D6"
 WAREHOUSE_BG = "#F3ECDD"
 GRASS = "#7FB069"
+GRASS_TOP = "#93C07A"
+GRASS_BOTTOM = "#6A9A54"
 GRASS_DARK = "#6E9E58"
 FENCE = "#F4F1EA"
 TEXT = "#3F3327"
@@ -52,10 +54,14 @@ def format_remaining(seconds: float) -> str:
     return "{:02d}:{:02d}".format(minutes, secs)
 
 
-def format_duration(seconds: int) -> str:
-    if seconds % 3600 == 0:
-        return "{}时".format(seconds // 3600)
-    return "{}分".format(seconds // 60)
+def _mix(color1: str, color2: str, ratio: float) -> str:
+    """两个 #RRGGBB 按比例线性插值。"""
+    out = []
+    for i in (1, 3, 5):
+        a = int(color1[i:i + 2], 16)
+        b = int(color2[i:i + 2], 16)
+        out.append("{:02X}".format(int(round(a + (b - a) * ratio))))
+    return "#" + "".join(out)
 
 
 class PastureCanvas(tk.Canvas):
@@ -91,6 +97,14 @@ class PastureCanvas(tk.Canvas):
         self.after(1000, remove)
 
     def _draw_scenery(self):
+        bands = 12
+        step = self.HEIGHT / bands
+        for i in range(bands):
+            self.create_rectangle(
+                2, i * step, self.WIDTH - 2, (i + 1) * step,
+                fill=_mix(GRASS_TOP, GRASS_BOTTOM, i / (bands - 1)),
+                outline="", tags=("scenery",),
+            )
         for band in ((60, 74), (170, 182), (300, 314), (400, 410)):
             self.create_rectangle(
                 2, band[0], self.WIDTH - 2, band[1],
@@ -122,6 +136,8 @@ class PastureCanvas(tk.Canvas):
         scale = {"calf": 0.55, "young": 0.75, "adult": 1.0}[stage]
         tags = ("cow", "cow-{}".format(cow.id))
         bw, bh = 58.0 * scale, 30.0 * scale
+        if pregnant:
+            bh *= 1.08  # 孕期身体略圆（规格 §7.2）
         cut = 8.0 * scale
         leg_h = 12.0 * scale
 
@@ -276,6 +292,8 @@ class CowApp(tk.Tk):
             self.set_status(self.load_error, seconds=8)
         elif load_warning:
             self.set_status(load_warning, seconds=8)
+        if not self._readonly:
+            self._save()  # 规格 §8.2：离线结算成功后落盘一次，防崩溃重复结算
         if start_loops:
             self.after(1000, self._tick)
             self.after(10000, self._autosave)
@@ -294,6 +312,8 @@ class CowApp(tk.Tk):
         for var in (self.coins_var, self.cows_var, self.ready_var, self.income_var):
             tk.Label(header, textvariable=var, bg=HEADER_BG, fg=TEXT,
                      font=FONT_BOLD).pack(side="left", padx=12, pady=6)
+        self.expand_label = tk.Label(header, text="已全部扩建", bg=HEADER_BG,
+                                     fg=MUTED, font=FONT_BOLD)
         self.expand_button = tk.Button(
             header, font=FONT, bd=0, relief="flat", bg="#DCEBD7",
             activebackground="#C9DFC2", disabledforeground="#B0A897",
@@ -325,8 +345,6 @@ class CowApp(tk.Tk):
             shop, text="全部投料", font=FONT, bd=0, relief="flat", bg="#DCEBD7",
             disabledforeground="#B0A897", command=self._on_process_all_click)
         self.process_all_button.pack(side="right", padx=8)
-        self.machine_frame = tk.Frame(shop, bg=HEADER_BG)
-        self.machine_frame.pack(side="right", padx=8)
 
         action = tk.Frame(self, bg=CARD_BG)
         action.pack(side="bottom", fill="x")
@@ -371,6 +389,10 @@ class CowApp(tk.Tk):
                 command=lambda k=key: self._on_sell_click(k))
             button.pack(side="right")
             self.sell_buttons[key] = button
+        tk.Label(warehouse, text="加工器", bg=WAREHOUSE_BG, fg=TEXT,
+                 font=FONT_BOLD).pack(anchor="w", padx=12, pady=(10, 0))
+        self.machine_frame = tk.Frame(warehouse, bg=WAREHOUSE_BG)
+        self.machine_frame.pack(fill="x", padx=12, pady=2)
         self.sell_all_button = tk.Button(
             warehouse, text="全部卖出", font=FONT, bd=0, relief="flat",
             bg="#DCEBD7", disabledforeground="#B0A897",
@@ -416,12 +438,17 @@ class CowApp(tk.Tk):
         self.ready_var.set("可挤奶 {}".format(ready))
         self.income_var.set("累计收入 {}".format(self.state.total_income))
         if self.state.capacity >= MAX_CAPACITY:
-            self.expand_button.configure(text="已全部扩建", state="disabled")
+            self.expand_button.pack_forget()
+            self.expand_label.pack(side="right", padx=12)
+            return
+        self.expand_label.pack_forget()
+        self.expand_button.pack(side="right", padx=12)
+        price = CAPACITY_PRICES[self.state.capacity - INITIAL_CAPACITY]
+        if self.state.coins < price:
+            self.expand_button.configure(text="金币不够", state="disabled")
         else:
-            price = CAPACITY_PRICES[self.state.capacity - 4]
             self.expand_button.configure(
-                text="扩建牧场 {}".format(price),
-                state="normal" if self.state.coins >= price else "disabled")
+                text="扩建牧场 {}".format(price), state="normal")
 
     def _sync_positions(self):
         alive = {c.id for c in self.state.cows}
@@ -437,7 +464,7 @@ class CowApp(tk.Tk):
                 self._targets[cow.id] = {"tx": tx, "ty": ty, "dwell": 0.0}
 
     def _initial_position(self, cow_id: int) -> Tuple[float, float]:
-        return (150.0 + (cow_id * 173) % 560, 150.0 + (cow_id * 97) % 200)
+        return (90.0 + (cow_id * 173) % 570, 110.0 + (cow_id * 97) % 240)
 
     def _facings(self) -> Dict[int, int]:
         """朝向跟随当前行走目标；停留/无目标时保持朝右。"""
@@ -522,6 +549,7 @@ class CowApp(tk.Tk):
             return
         stage = stage_of(cow, now)
         parts = ["{}（{}）".format(cow.name, STAGE_LABELS[stage])]
+        full = False
         if stage == "adult":
             if cow.pregnant:
                 parts.append("怀孕 还需 {}".format(
@@ -529,7 +557,13 @@ class CowApp(tk.Tk):
             elif cow.recovery_until > now:
                 parts.append("产后休养 还需 {}".format(
                     format_remaining(cow.recovery_until - now)))
-            if udder_ready(cow, now):
+            elif ready_at(cow) <= now:
+                if free_slot_left(self.state):
+                    parts.append("可孕")
+                else:
+                    parts.append("可孕（等空位）")
+            full = udder_ready(cow, now)
+            if full:
                 parts.append("满奶！")
             else:
                 anchor = max(cow.last_milked_at, adult_at(cow))
@@ -537,13 +571,13 @@ class CowApp(tk.Tk):
                     format_remaining(anchor + MILK_INTERVAL - now)))
         else:
             next_stage_at = adult_at(cow) if stage == "young" else (
-                cow.born_at + 45 * 60 - cow.fed_count * 900)
+                cow.born_at + GROWTH_YOUNG - cow.fed_count * FEED_CREDIT)
             parts.append("长大还需 {}".format(
                 format_remaining(next_stage_at - now)))
         self.action_var.set("  ".join(parts))
         self.milk_button.configure(
-            state="normal" if (stage == "adult" and udder_ready(cow, now))
-            else "disabled")
+            state="normal" if full else "disabled",
+            bg="#F7E1A8" if full else "#DCEBD7")
         reason = self._feed_disable_reason(cow, now)
         if reason is None:
             self.feed_button.configure(
@@ -558,20 +592,28 @@ class CowApp(tk.Tk):
     def _update_shop(self):
         if not free_slot_left(self.state):
             self.buy_calf_button.configure(text="牧场满了", state="disabled")
+        elif self.state.coins < CALF_PRICE:
+            self.buy_calf_button.configure(text="金币不够", state="disabled")
         else:
             self.buy_calf_button.configure(
-                text="买牛仔 {}".format(CALF_PRICE),
-                state="normal" if self.state.coins >= CALF_PRICE else "disabled")
-        self.buy_feed_button.configure(
-            text="高级饲料 {}（背包 {}）".format(FEED_PRICE, self.state.feed_count),
-            state="normal" if self.state.coins >= FEED_PRICE else "disabled")
+                text="买牛仔 {}".format(CALF_PRICE), state="normal")
+        if self.state.coins < FEED_PRICE:
+            self.buy_feed_button.configure(text="金币不够", state="disabled")
+        else:
+            self.buy_feed_button.configure(
+                text="高级饲料 {}（背包 {}）".format(
+                    FEED_PRICE, self.state.feed_count), state="normal")
         if len(self.state.machines) >= MAX_MACHINES:
-            self.buy_machine_button.configure(text="加工器已达上限", state="disabled")
+            self.buy_machine_button.configure(text="加工器已达上限",
+                                              state="disabled")
         else:
             price = MACHINE_PRICES[len(self.state.machines)]
-            self.buy_machine_button.configure(
-                text="买加工器 {}".format(price),
-                state="normal" if self.state.coins >= price else "disabled")
+            if self.state.coins < price:
+                self.buy_machine_button.configure(text="金币不够",
+                                                  state="disabled")
+            else:
+                self.buy_machine_button.configure(
+                    text="买加工器 {}".format(price), state="normal")
 
     def _update_machines(self, now: float):
         if len(self.machine_rows) != len(self.state.machines):
@@ -579,30 +621,34 @@ class CowApp(tk.Tk):
                 child.destroy()
             self.machine_rows = []
             for index in range(len(self.state.machines)):
-                row = tk.Frame(self.machine_frame, bg=HEADER_BG)
-                row.pack(side="left", padx=4)
+                row = tk.Frame(self.machine_frame, bg=WAREHOUSE_BG)
+                row.pack(fill="x", pady=1)
                 var = tk.StringVar()
-                tk.Label(row, textvariable=var, bg=HEADER_BG, fg=TEXT,
-                         font=FONT_SMALL).pack(side="top")
+                tk.Label(row, textvariable=var, bg=WAREHOUSE_BG, fg=TEXT,
+                         font=FONT_SMALL).pack(side="left")
+                # 行内左状态右按钮；340px 面板内长文案留给标签，按钮保持短
                 button = tk.Button(
-                    row, text="投料（{}牛奶）".format(CHEESE_MILK_COST),
-                    font=FONT_SMALL, bd=0, relief="flat", bg="#DCEBD7",
-                    disabledforeground="#B0A897",
+                    row, text="投料", font=FONT_SMALL, bd=0, relief="flat",
+                    bg="#DCEBD7", disabledforeground="#B0A897",
                     command=lambda i=index: self._on_process_click(i))
-                button.pack(side="top")
+                button.pack(side="right")
                 self.machine_rows.append((var, button))
         self.process_all_button.configure(
             state="normal" if self.state.machines else "disabled")
         for index, started in enumerate(self.state.machines):
             var, button = self.machine_rows[index]
             if started is None:
-                var.set("#{} 空闲".format(index + 1))
+                var.set("#{} 空闲（3奶→1酪）".format(index + 1))
                 button.configure(
                     state="normal"
                     if self.state.stock("milk") >= CHEESE_MILK_COST else "disabled")
             else:
-                var.set("#{} 制作中 {}".format(
-                    index + 1, format_remaining(started + CHEESE_TIME - now)))
+                done = min(1.0, max(0.0, (now - started) / CHEESE_TIME))
+                blocks = "▓" * int(done * 6 + 0.5) + "░" * (
+                    6 - int(done * 6 + 0.5))
+                var.set("#{} {} {}".format(
+                    index + 1, blocks,
+                    format_remaining(started + CHEESE_TIME - now)))
                 button.configure(state="disabled")
 
     # ---------- 状态栏 ----------
@@ -692,13 +738,18 @@ class CowApp(tk.Tk):
         cow = self.state.find_cow(self.selected_id)
         if cow is None:
             return
+        was_pregnant = cow.pregnant
         try:
             got = self.state.sell_cow(cow.id, self.clock())
         except ValueError as exc:
             self.set_status(str(exc))
         else:
             self.selected_id = None
-            self.set_status("卖出了 {}，+{} 金币".format(cow.name, got))
+            if was_pregnant:
+                self.set_status("卖出了 {}（连同腹中牛犊），+{} 金币".format(
+                    cow.name, got), seconds=5)
+            else:
+                self.set_status("卖出了 {}，+{} 金币".format(cow.name, got))
             self._save()
         self.refresh()
 

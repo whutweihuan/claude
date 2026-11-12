@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """cow_gui 冒烟与布局测试。构建窗口用 start_loops=False，不进 mainloop。"""
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -138,6 +139,69 @@ class GuiInteractionTests(unittest.TestCase):
         self.assertIn("金币不够", self.app.status_var.get())
         self.assertEqual(len(self.app.state.machines), 0)
 
+    def test_shop_buttons_show_not_enough_coins(self):
+        self.app.state.coins = 0
+        self.app.refresh()
+        self.assertEqual(self.app.buy_calf_button.cget("text"), "金币不够")
+        self.assertEqual(self.app.buy_feed_button.cget("text"), "金币不够")
+        self.assertEqual(self.app.buy_machine_button.cget("text"), "金币不够")
+        self.assertEqual(self.app.expand_button.cget("text"), "金币不够")
+
+    def test_feed_buys_and_feeds_success(self):
+        from cow_core import Cow
+        s = self.app.state
+        s.coins = 1000
+        s.cows.append(Cow(id=s.next_cow_id, name="大壮",
+                          born_at=time.time() - 600, last_milked_at=time.time()))
+        calf_id = s.next_cow_id
+        s.next_cow_id += 1
+        self.app._on_buy_feed_click()
+        self.assertEqual(s.feed_count, 1)
+        self.assertIn("背包 1 份", self.app.status_var.get())
+        self.app.selected_id = calf_id
+        self.app._on_feed_click()
+        self.assertEqual(s.find_cow(calf_id).fed_count, 1)
+        self.assertIn("喂了 大壮", self.app.status_var.get())
+
+    def test_expand_success_then_full_label(self):
+        s = self.app.state
+        s.coins = 10000
+        self.app._on_expand_click()
+        self.assertEqual(s.capacity, 5)
+        self.assertIn("扩建到 5", self.app.status_var.get())
+        s.capacity = 12
+        self.app.refresh()
+        self.assertEqual(self.app.expand_button.winfo_manager(), "")
+        self.assertEqual(self.app.expand_label.cget("text"), "已全部扩建")
+        self.assertEqual(self.app.expand_label.winfo_manager(), "pack")
+
+    def test_ready_segment_in_action_bar(self):
+        # 设计机制：有空位时可孕牛会在结算瞬间补孕，"可孕"只在等位时可见
+        s = self.app.state
+        s.capacity = 1
+        cow = s.cows[0]
+        cow.pregnant = False
+        cow.due_at = 0.0
+        cow.recovery_until = 0.0
+        self.app.selected_id = 1
+        self.app.refresh()
+        self.assertIn("可孕（等空位）", self.app.action_var.get())
+
+    def test_sell_pregnant_cow_mentions_fetus(self):
+        self.app.selected_id = 1  # 花花开局已怀
+        self.assertTrue(self.app.state.cows[0].pregnant)
+        self.app._on_sell_cow_click()
+        self.assertIn("腹中", self.app.status_var.get())
+
+    def test_machine_progress_blocks(self):
+        s = self.app.state
+        s.coins = 5000
+        s.buy_machine()
+        s.warehouse["milk"] = 3
+        self.app._on_process_click(0)
+        text = self.app.machine_rows[0][0].get()
+        self.assertRegex(text, r"^#1 [░▓]{6} \d+(:\d+)+$")
+
     def test_operations_persist_to_save(self):
         self._make_cow_full()
         self.app._on_cow_click(1)
@@ -251,6 +315,20 @@ class GuiPersistenceTests(unittest.TestCase):
         app.update_idletasks()
         return app
 
+    def test_startup_settles_and_persists(self):
+        app = self._build()
+        app.destroy()
+        self.assertTrue(self.save_path.exists())
+        data = json.loads(self.save_path.read_text(encoding="utf-8"))
+        self.assertTrue(data["cows"][0]["pregnant"])  # 开局结算已落盘
+
+    def test_close_saves_changes(self):
+        app = self._build()
+        app.state.coins = 555
+        app._on_close()
+        data = json.loads(self.save_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["coins"], 555)
+
     def test_corrupt_save_shows_warning(self):
         app = self._build()
         app.destroy()
@@ -308,7 +386,7 @@ s.cows.append(Cow(id=s.next_cow_id, name="团团", born_at=now - 10800,
                   last_milked_at=now - MILK_INTERVAL - 1)); s.next_cow_id += 1
 s.cows.append(Cow(id=s.next_cow_id, name="默默", born_at=now,
                   last_milked_at=now)); s.next_cow_id += 1
-s.buy_machine(); s.buy_machine()
+s.buy_machine(); s.buy_machine(); s.buy_machine()
 s.warehouse.update({"milk": 1234, "cheese": 56})
 s.process(0, now)
 s.feed_count = 7
@@ -322,6 +400,9 @@ problems = []
 if app.winfo_reqwidth() > app.winfo_width():
     problems.append("window req %d > width %d"
                     % (app.winfo_reqwidth(), app.winfo_width()))
+if app.winfo_reqheight() > app.winfo_height():
+    problems.append("window reqh %d > height %d"
+                    % (app.winfo_reqheight(), app.winfo_height()))
 if app.minsize()[0] < 1260 or app.minsize()[1] < 640:
     problems.append("minsize %r" % (app.minsize(),))
 
@@ -345,6 +426,8 @@ def walk(w):
 for widget in walk(app):
     if widget.winfo_class() not in ("Label", "Button"):
         continue
+    if not widget.winfo_ismapped():
+        continue  # 隐藏的替换控件不参与测量
     text = widget_text(widget)
     if not text:
         continue
@@ -355,6 +438,8 @@ for widget in walk(app):
 
 canvas = app.pasture
 cw, ch = canvas.winfo_width(), canvas.winfo_height()
+if ch < canvas.HEIGHT - 2:
+    problems.append("pasture squeezed to %d < %d" % (ch, canvas.HEIGHT))
 for item in canvas.find_all():
     if canvas.type(item) != "text":
         continue
@@ -388,7 +473,8 @@ class GuiLayoutTests(unittest.TestCase):
     def _texts(self, widget):
         found = []
         for child in widget.winfo_children():
-            if child.winfo_class() == "Label":
+            if child.winfo_class() in ("Label", "Button") \
+                    and child.winfo_ismapped():
                 tv = str(child.cget("textvariable") or "")
                 text = str(child.tk.globalgetvar(tv)) if tv else str(child.cget("text"))
                 if text:
@@ -398,7 +484,8 @@ class GuiLayoutTests(unittest.TestCase):
 
     def test_warehouse_labels_fit(self):
         import tkinter.font as tkfont
-        for label, text in self._texts(self.app.warehouse_frame):
+        for label, text in self._texts(self.app.warehouse_frame) + \
+                self._texts(self.app):
             font = tkfont.Font(font=label.cget("font"))
             self.assertLessEqual(
                 font.measure(text), label.winfo_width(),
