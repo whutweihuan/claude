@@ -152,6 +152,31 @@ class GameState:
         return (self.stock("milk") * MILK_PRICE
                 + self.stock("cheese") * CHEESE_PRICE)
 
+    def can_feed(self, cow_id: int, now: float) -> bool:
+        cow = self.find_cow(cow_id)
+        if cow is None or stage_of(cow, now) == "adult":
+            return False
+        if cow.fed_count >= FEED_MAX or self.feed_count <= 0:
+            return False
+        return now - cow.last_fed_at >= FEED_COOLDOWN
+
+    def feed(self, cow_id: int, now: float) -> None:
+        self.catch_up(now)
+        cow = self.find_cow(cow_id)
+        if cow is None:
+            raise ValueError("没有这头牛")
+        if stage_of(cow, now) == "adult":
+            raise ValueError("这头牛已经成年")
+        if cow.fed_count >= FEED_MAX:
+            raise ValueError("这头牛最多喂 3 次")
+        if now - cow.last_fed_at < FEED_COOLDOWN:
+            raise ValueError("投喂间隔不足 10 分钟")
+        if self.feed_count <= 0:
+            raise ValueError("没有高级饲料")
+        self.feed_count -= 1
+        cow.fed_count += 1
+        cow.last_fed_at = now
+
 
 def free_slot_left(state: GameState) -> bool:
     """预留空位闸门：牛数 + 孕妇数 < 容量，才允许新生命入场。"""

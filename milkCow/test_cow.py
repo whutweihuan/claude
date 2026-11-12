@@ -108,5 +108,48 @@ class MilkTests(unittest.TestCase):
         self.assertEqual(self.s.sell_all_stock(), 0)  # 空仓返回 0 不报错
 
 
+class FeedTests(unittest.TestCase):
+    def setUp(self):
+        self.s = new_game(T0)
+        self.s.cows.append(make_cow(id=2, born_at=T0))  # 刚出生的牛仔
+        self.s.feed_count = 1
+
+    def test_feed_advances_adulthood(self):
+        self.s.feed(2, T0)
+        self.assertEqual(self.s.feed_count, 0)
+        self.assertEqual(self.s.cows[1].fed_count, 1)
+        self.assertEqual(stage_of(self.s.cows[1], T0 + 120 * 60), "adult")  # 135-15=120
+        self.assertEqual(stage_of(self.s.cows[1], T0 + 119 * 60), "young")
+
+    def test_feed_three_max_and_cooldown(self):
+        self.s.feed_count = 5
+        self.s.feed(2, T0)
+        with self.assertRaisesRegex(ValueError, "投喂间隔不足 10 分钟"):
+            self.s.feed(2, T0 + 599)
+        self.s.feed(2, T0 + 600)
+        self.s.feed(2, T0 + 1200)
+        self.assertEqual(self.s.cows[1].fed_count, 3)
+        with self.assertRaisesRegex(ValueError, "最多喂 3 次"):
+            self.s.feed(2, T0 + 1800)
+
+    def test_feed_rejects_adult(self):
+        with self.assertRaisesRegex(ValueError, "已经成年"):
+            self.s.feed(1, T0)  # 花花是成年牛
+
+    def test_feed_rejects_empty_bag(self):
+        self.s.feed_count = 0
+        with self.assertRaisesRegex(ValueError, "没有高级饲料"):
+            self.s.feed(2, T0)
+
+    def test_feed_unknown_cow(self):
+        with self.assertRaisesRegex(ValueError, "没有这头牛"):
+            self.s.feed(42, T0)
+
+    def test_feed_does_not_touch_coins(self):
+        coins = self.s.coins
+        self.s.feed(2, T0)
+        self.assertEqual(self.s.coins, coins)
+
+
 if __name__ == "__main__":
     unittest.main()
