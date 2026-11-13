@@ -154,5 +154,64 @@ class CombatScreenTests(GuiTestCase):
         self.assertIsNotNone(app.game.pending)
 
 
+class TargetingTests(GuiTestCase):
+
+    def two_enemy_combat(self, potions=None):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin', 'wolf'],
+                           hand=['strike', 'cleave', 'defend', 'defend',
+                                 'defend'])
+        if potions:
+            app.game.hero.potions = list(potions)
+            app.show_combat()
+        return app, combat
+
+    def test_single_target_card_enters_targeting(self):
+        app, combat = self.two_enemy_combat()
+        app.hand_buttons[0].invoke()  # strike 单体、双敌 → 选目标
+        self.assertEqual(app._pending_card, 0)
+        self.assertTrue(app.cancel_btn.winfo_manager() != '')
+
+    def test_target_click_hits_only_chosen(self):
+        app, combat = self.two_enemy_combat()
+        app.hand_buttons[0].invoke()
+        hp0, hp1 = combat.enemies[0].hp, combat.enemies[1].hp
+        app.enemy_buttons[1].invoke()  # 打 1 号 wolf
+        self.assertEqual(combat.enemies[0].hp, hp0)
+        self.assertEqual(combat.enemies[1].hp, hp1 - 6)
+        self.assertIsNone(app._pending_card)
+
+    def test_cancel_returns_to_plain(self):
+        app, combat = self.two_enemy_combat()
+        app.hand_buttons[0].invoke()
+        hp0, hp1 = combat.enemies[0].hp, combat.enemies[1].hp
+        app._cancel_targeting()
+        self.assertEqual(combat.enemies[0].hp, hp0)
+        self.assertEqual(combat.enemies[1].hp, hp1)
+        self.assertIsNone(app._pending_card)
+
+    def test_reclick_same_card_cancels(self):
+        app, combat = self.two_enemy_combat()
+        app.hand_buttons[0].invoke()
+        app.hand_buttons[0].invoke()
+        self.assertIsNone(app._pending_card)
+        self.assertEqual(combat.enemies[0].hp, 14)
+
+    def test_aoe_no_target_needed(self):
+        app, combat = self.two_enemy_combat()
+        app.hand_buttons[1].invoke()  # cleave 群伤直接结算
+        self.assertEqual(combat.enemies[0].hp, 14 - 7)
+        self.assertEqual(combat.enemies[1].hp, 12 - 7)
+        self.assertIsNone(app._pending_card)
+
+    def test_potion_targeted_uses_targeting(self):
+        app, combat = self.two_enemy_combat(potions=['p_acid'])
+        app.potion_buttons[0].invoke()
+        self.assertEqual(app._pending_potion, 0)
+        app.enemy_buttons[0].invoke()
+        self.assertEqual(combat.enemies[0].hp, 14 - 12)
+        self.assertEqual(app.game.hero.potions, [])
+
+
 if __name__ == '__main__':
     unittest.main()

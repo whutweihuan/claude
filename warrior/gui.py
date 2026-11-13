@@ -11,6 +11,8 @@ import content
 from ui import KIND_ICON, KIND_NAME
 
 WRAP_PX = 170
+SINGLE_TARGET_OPS = ('damage', 'pierce', 'execute', 'vulnerable', 'poison',
+                     'bonus_if_vulnerable')
 
 
 def _enable_dpi_awareness():
@@ -216,15 +218,17 @@ class WarriorGUI(object):
         combat = g.active
         self._clear()
         self._update_status()
-        self._pending_card = None
-        self._pending_potion = None
         outer = ttk.Frame(self.container)
         outer.pack(fill='both', expand=True, padx=8, pady=4)
         if getattr(self, '_logged_combat', None) is not combat:
             self._logged_combat = combat
+            self._pending_card = None
+            self._pending_potion = None
             self._combat_log = []
             self._log(['--- 遭遇 %s！---' % '、'.join(
                 e.name for e in combat.enemies)])
+        targeting = (self._pending_card is not None
+                     or self._pending_potion is not None)
         snap = combat.snapshot()
         ttk.Label(outer, text='生命 %d/%d  格挡 %d  能量 %d  第 %d 回合'
                   % (snap['hp'], snap['max_hp'], snap['block'],
@@ -244,9 +248,10 @@ class WarriorGUI(object):
                 extras.append('毒%d' % e['poison'])
             f = ttk.Frame(ef)
             f.pack(side='left', padx=4)
+            prefix = '◉ ' if targeting else ''
             btn = ttk.Button(
-                f, text='%s\n%d/%d 意图:%s%s'
-                       % (e['name'], e['hp'], e['max_hp'],
+                f, text='%s%s\n%d/%d 意图:%s%s'
+                       % (prefix, e['name'], e['hp'], e['max_hp'],
                           e['intent'] or '…',
                           (' ' + '/'.join(extras)) if extras else ''),
                 command=lambda idx=i: self._on_enemy(idx))
@@ -285,6 +290,8 @@ class WarriorGUI(object):
             side='left', padx=4)
         self.cancel_btn = ttk.Button(af, text='取消',
                                      command=self._cancel_targeting)
+        if targeting:
+            self.cancel_btn.pack(side='left', padx=4)
         self.log_text = ScrolledText(outer, height=7, wrap='word')
         self.log_text.pack(fill='x', pady=4)
         self._render_log()
@@ -317,6 +324,12 @@ class WarriorGUI(object):
 
     # ---------- 战斗动作 ----------
 
+    def _needs_target(self, card_id, upgraded, combat):
+        if sum(1 for e in combat.enemies if e.alive) <= 1:
+            return False
+        effects, _text = combat.effects_for(card_id, upgraded)
+        return any(eff[0] in SINGLE_TARGET_OPS for eff in effects)
+
     def _on_card(self, idx):
         combat = self.game.active
         if combat is None or combat.status != 'playing':
@@ -325,16 +338,49 @@ class WarriorGUI(object):
         if not (0 <= idx < len(snap['hand'])) \
                 or not snap['hand'][idx]['playable']:
             return
+        if self._pending_card == idx:
+            self._pending_card = None
+            self.show_combat()
+            return
+        card_id, upgraded = combat.hand[idx]
+        if self._needs_target(card_id, upgraded, combat):
+            self._pending_card = idx
+            self._pending_potion = None
+            self.show_combat()
+            return
+        self._pending_card = None
         lines = combat.play_card(idx, None)
         self._after_action(lines)
 
     def _on_enemy(self, idx):
-        return
+        combat = self.game.active
+        if combat is None or combat.status != 'playing':
+            return
+        if self._pending_card is not None:
+            card_idx = self._pending_card
+            self._pending_card = None
+            lines = combat.play_card(card_idx, idx)
+            self._after_action(lines)
+        elif self._pending_potion is not None:
+            slot = self._pending_potion
+            self._pending_potion = None
+            lines = combat.use_potion(slot, idx)
+            self._after_action(lines)
 
     def _on_potion(self, slot):
         combat = self.game.active
         if combat is None or combat.status != 'playing':
             return
+        if not (0 <= slot < len(combat.hero.potions)):
+            return
+        pid = combat.hero.potions[slot]
+        if content.POTIONS[pid].targeted \
+                and sum(1 for e in combat.enemies if e.alive) > 1:
+            self._pending_potion = slot
+            self._pending_card = None
+            self.show_combat()
+            return
+        self._pending_potion = None
         lines = combat.use_potion(slot, None)
         self._after_action(lines)
 
