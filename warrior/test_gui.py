@@ -655,6 +655,62 @@ def all_texts(widget):
     return out
 
 
+class RefreshTests(GuiTestCase):
+    """战斗屏增量刷新：出牌后控件复用，不再整屏销毁重建。"""
+
+    def test_card_play_reuses_widgets(self):
+        app = make_app(self.root, seed=7)
+        to_combat(app, enemies=['goblin'])
+        before = list(app.hand_buttons)
+        self.assertTrue(before)
+        app.hand_buttons[0].invoke()
+        self.assertIs(app.hand_buttons[0], before[0])
+
+    def test_hand_slot_hidden_after_play(self):
+        app = make_app(self.root, seed=7)
+        to_combat(app, enemies=['goblin'],
+                  hand=['strike', 'strike', 'strike'])
+        app.hand_buttons[0].invoke()
+        self.assertEqual(len(app.hand_buttons), 2)
+        self.assertEqual(app._cw['hand_pool'][2].winfo_manager(), '')
+        self.assertNotEqual(app._cw['hand_pool'][1].winfo_manager(), '')
+
+    def test_dead_enemy_marked_disabled(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin', 'wolf'], hand=['cleave'])
+        combat.enemies[0].hp = 3
+        app.show_combat()
+        app.hand_buttons[0].invoke()  # 横扫群伤：哥布林死、狼存活
+        self.assertEqual(combat.enemies[0].hp, 0)
+        self.assertTrue(app.enemy_buttons[0].instate(('disabled',)))
+        self.assertIn('已倒下', app.enemy_buttons[0].cget('text'))
+        self.assertFalse(app.enemy_buttons[1].instate(('disabled',)))
+
+    def test_hero_statuses_visible_in_combat(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin'])
+        combat.strength = 1
+        combat.vulnerable = 2
+        combat.poison = 3
+        app.show_combat()
+        text = '\n'.join(all_texts(app.container))
+        self.assertIn('力量+1', text)
+        self.assertIn('易伤2', text)
+        self.assertIn('毒3', text)
+
+    def test_log_append_preserves_history(self):
+        app = make_app(self.root, seed=7)
+        to_combat(app, enemies=['goblin'])
+        app._log(['测试行A'])
+        app._log(['测试行B'])
+        app.hand_buttons[0].invoke()
+        log = app.log_text.get('1.0', tk.END)
+        self.assertIn('遭遇', log)
+        self.assertIn('测试行A', log)
+        self.assertIn('测试行B', log)
+        self.assertIn('打出', log)
+
+
 class ForgeConfirmTests(GuiTestCase):
 
     def campfire_at_strike(self):

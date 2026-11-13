@@ -85,6 +85,7 @@ class WarriorGUI(object):
         return False
 
     def _clear(self):
+        self._cw = None
         for child in self.container.winfo_children():
             child.destroy()
 
@@ -236,9 +237,39 @@ class WarriorGUI(object):
 
     # ---------- 战斗屏 ----------
 
+    HAND_SLOTS = 12
+
+    def _card_btn_text(self, card):
+        star = '+' if card['upgraded'] else ''
+        body = '\n'.join(
+            textwrap.wrap('%d费 %s' % (card['cost'], card['text']), 7))
+        return '%s%s\n%s' % (card['name'], star, body)
+
+    def _enemy_btn_text(self, e, targeting):
+        prefix = '◉ ' if targeting else ''
+        if not e['alive']:
+            return prefix + e['name'] + '\n已倒下'
+        lines = [prefix + e['name'], '%d/%d' % (e['hp'], e['max_hp'])]
+        lines.extend(textwrap.wrap('意图 %s' % (e['intent'] or '…'), 8))
+        extras = []
+        if e['block']:
+            extras.append('格挡%d' % e['block'])
+        if e['vulnerable']:
+            extras.append('易伤%d' % e['vulnerable'])
+        if e['poison']:
+            extras.append('毒%d' % e['poison'])
+        if extras:
+            lines.extend(textwrap.wrap(' '.join(extras), 7))
+        return '\n'.join(lines)
+
     def show_combat(self):
         g = self.game
         combat = g.active
+        cw = getattr(self, '_cw', None)
+        if (cw is not None and cw['combat'] is combat
+                and cw['outer'].winfo_exists()):
+            self._refresh_combat()
+            return
         self._clear()
         self._update_status()
         outer = ttk.Frame(self.container)
@@ -249,84 +280,121 @@ class WarriorGUI(object):
             self._pending_potion = None
             self._combat_log = ['--- 遭遇 %s！---' % '、'.join(
                 e.name for e in combat.enemies)]
-        targeting = (self._pending_card is not None
-                     or self._pending_potion is not None)
-        snap = combat.snapshot()
-        bonus = (combat.mods.get('attack_bonus', 0)
-                 + combat.mods.get('attack_damage_base', 0))
-        ttk.Label(outer,
-                  text='格挡 %d  能量 %d  第 %d 回合%s'
-                       % (snap['block'], snap['energy'], snap['turn'],
-                          ('  攻击加值 +%d' % bonus) if bonus else '')
-                  ).pack(anchor='w')
+        info_lbl = ttk.Label(outer, text='')
+        info_lbl.pack(anchor='w')
         ef = ttk.Frame(outer)
         ef.pack(fill='x', pady=2)
-        self.enemy_buttons = []
         enemy_frames = []
-        for i, e in enumerate(snap['enemies']):
-            if not e['alive']:
-                continue
-            extras = []
-            if e['block']:
-                extras.append('格挡%d' % e['block'])
-            if e['vulnerable']:
-                extras.append('易伤%d' % e['vulnerable'])
-            if e['poison']:
-                extras.append('毒%d' % e['poison'])
+        enemy_btns = []
+        enemy_bars = []
+        for i in range(len(combat.enemies)):
             f = ttk.Frame(ef)
             enemy_frames.append(f)
-            prefix = '◉ ' if targeting else ''
-            lines = [prefix + e['name'], '%d/%d' % (e['hp'],
-                                                    e['max_hp'])]
-            intent_line = '意图 %s' % (e['intent'] or '…')
-            lines.extend(textwrap.wrap(intent_line, 8))
-            if extras:
-                lines.extend(textwrap.wrap(' '.join(extras), 7))
-            btn = ttk.Button(
-                f, text='\n'.join(lines),
-                command=lambda idx=i: self._on_enemy(idx))
+            btn = ttk.Button(f, text='',
+                             command=lambda idx=i: self._on_enemy(idx))
             btn.pack()
             bar = tk.Canvas(f, width=110, height=10, highlightthickness=0)
             bar.pack(pady=(2, 0))
-            self._draw_hp_bar(bar, e['hp'], e['max_hp'])
-            self.enemy_buttons.append(btn)
+            enemy_btns.append(btn)
+            enemy_bars.append(bar)
         _flow_layout(ef, enemy_frames, 2)
         hf = ttk.Frame(outer)
         hf.pack(fill='x', pady=6)
-        self.hand_buttons = []
-        for card in snap['hand']:
-            star = '+' if card['upgraded'] else ''
-            body = '\n'.join(
-                textwrap.wrap('%d费 %s' % (card['cost'], card['text']), 7))
-            btn = ttk.Button(
-                hf,
-                text='%s%s\n%s' % (card['name'], star, body),
-                command=lambda idx=card['idx']: self._on_card(idx))
-            if not card['playable']:
-                btn.state(['disabled'])
-            self.hand_buttons.append(btn)
-        _flow_layout(hf, self.hand_buttons, 3)
+        pool = []
+        for j in range(self.HAND_SLOTS):
+            b = ttk.Button(hf, text='',
+                           command=lambda idx=j: self._on_card(idx))
+            pool.append(b)
+        _flow_layout(hf, pool, 3)
+        for b in pool:
+            b.grid_remove()
         af = ttk.Frame(outer)
         af.pack(fill='x', pady=2)
         self.end_btn = ttk.Button(af, text='结束回合',
                                   command=self._on_end_turn)
         self.end_btn.pack(side='left', padx=4)
-        self.potion_buttons = []
-        for slot, pid in enumerate(snap['potions']):
-            pb = ttk.Button(af, text='药水·%s' % content.POTIONS[pid].name,
-                            command=lambda s=slot: self._on_potion(s))
-            pb.pack(side='left', padx=2)
-            self.potion_buttons.append(pb)
+        self.potion_row = ttk.Frame(af)
+        self.potion_row.pack(side='left')
         ttk.Button(af, text='详情', command=self._show_details).pack(
             side='left', padx=4)
         self.cancel_btn = ttk.Button(af, text='取消',
                                      command=self._cancel_targeting)
-        if targeting:
-            self.cancel_btn.pack(side='left', padx=4)
         self.log_text = ScrolledText(outer, height=4, width=58,
                                       wrap='word')
         self.log_text.pack(fill='x', pady=4)
+        self._cw = {'combat': combat, 'outer': outer, 'info': info_lbl,
+                    'enemy_btns': enemy_btns, 'enemy_bars': enemy_bars,
+                    'hand_pool': pool, 'potion_sig': None}
+        self._log_rendered = 0
         self._render_log()
+        self._refresh_combat()
+
+    def _refresh_combat(self):
+        cw = self._cw
+        combat = cw['combat']
+        snap = combat.snapshot()
+        targeting = (self._pending_card is not None
+                     or self._pending_potion is not None)
+        bonus = (combat.mods.get('attack_bonus', 0)
+                 + combat.mods.get('attack_damage_base', 0))
+        info = '格挡 %d  能量 %d  第 %d 回合' % (snap['block'],
+                                               snap['energy'],
+                                               snap['turn'])
+        if bonus:
+            info += '  攻击加值 +%d' % bonus
+        hero_states = []
+        if combat.strength:
+            hero_states.append('力量+%d' % combat.strength)
+        if combat.vulnerable:
+            hero_states.append('易伤%d' % combat.vulnerable)
+        if combat.poison:
+            hero_states.append('毒%d' % combat.poison)
+        if hero_states:
+            info += '   你的状态: ' + ' '.join(hero_states)
+        cw['info'].configure(text=info)
+        for i, e in enumerate(snap['enemies']):
+            btn = cw['enemy_btns'][i]
+            btn.configure(text=self._enemy_btn_text(e, targeting))
+            if e['alive']:
+                btn.state(['!disabled'])
+            else:
+                btn.state(['disabled'])
+            self._draw_hp_bar(cw['enemy_bars'][i], e['hp'], e['max_hp'])
+        hand = snap['hand']
+        pool = cw['hand_pool']
+        self.hand_buttons = pool[:len(hand)]
+        self.enemy_buttons = list(cw['enemy_btns'])
+        for j, b in enumerate(pool):
+            if j < len(hand):
+                card = hand[j]
+                b.configure(text=self._card_btn_text(card))
+                if card['playable']:
+                    b.state(['!disabled'])
+                else:
+                    b.state(['disabled'])
+                b.grid()
+            else:
+                b.grid_remove()
+        sig = tuple(snap['potions'])
+        if cw['potion_sig'] != sig:
+            for w in self.potion_row.winfo_children():
+                w.destroy()
+            self.potion_buttons = []
+            for slot, pid in enumerate(sig):
+                pb = ttk.Button(
+                    self.potion_row,
+                    text='药水·%s' % content.POTIONS[pid].name,
+                    command=lambda s=slot: self._on_potion(s))
+                pb.pack(side='left', padx=2)
+                self.potion_buttons.append(pb)
+            cw['potion_sig'] = sig
+        if targeting:
+            if not self.cancel_btn.winfo_manager():
+                self.cancel_btn.pack(side='left', padx=4)
+        else:
+            self.cancel_btn.pack_forget()
+        self._append_new_log_lines()
+        self._update_status()
         self._fit()
 
     def _draw_hp_bar(self, canvas, hp, max_hp):
@@ -341,21 +409,38 @@ class WarriorGUI(object):
     # ---------- 战斗日志 ----------
 
     def _render_log(self):
+        """整量重写（仅重建战斗屏时用）。"""
         if not hasattr(self, 'log_text') or not self.log_text.winfo_exists():
+            self._log_rendered = len(getattr(self, '_combat_log', []))
             return
         self.log_text.configure(state='normal')
         self.log_text.delete('1.0', 'end')
-        for line in self._combat_log[-120:]:
-            self.log_text.insert('end', line + '\n')
+        self.log_text.insert('end', '\n'.join(self._combat_log[-120:]))
+        if self._combat_log:
+            self.log_text.insert('end', '\n')
         self.log_text.see('end')
         self.log_text.configure(state='disabled')
+        self._log_rendered = len(self._combat_log)
+
+    def _append_new_log_lines(self):
+        """增量追加新日志行——不闪屏的关键。"""
+        if not hasattr(self, 'log_text') or not self.log_text.winfo_exists():
+            self._log_rendered = len(getattr(self, '_combat_log', []))
+            return
+        new = self._combat_log[self._log_rendered:]
+        if new:
+            self.log_text.configure(state='normal')
+            for line in new:
+                self.log_text.insert('end', line + '\n')
+            self.log_text.see('end')
+            self.log_text.configure(state='disabled')
+        self._log_rendered = len(self._combat_log)
 
     def _log(self, lines):
         if not hasattr(self, '_combat_log'):
             self._combat_log = []
         self._combat_log.extend(lines)
-        if hasattr(self, 'log_text'):
-            self._render_log()
+        self._append_new_log_lines()
 
     # ---------- 战斗动作 ----------
 
