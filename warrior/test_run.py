@@ -322,5 +322,103 @@ class ShopTests(unittest.TestCase):
         self.assertEqual(len(run.hero.potions), 3)
 
 
+class EventTests(unittest.TestCase):
+
+    def goto_event(self, run):
+        kind, ev = force_node(run, find_node(run, 'event'))
+        assert kind == 'event'
+        return ev
+
+    def test_every_event_option_runs(self):
+        for eid, ev in content.EVENTS.items():
+            for oi in range(len(ev.options)):
+                run = core.Run(3000 + oi * 7)
+                obj = self.goto_event(run)
+                lines, follow = core.apply_event(run, obj, oi)
+                self.assertTrue(lines, (eid, oi))
+                if follow is not None:
+                    self.assertEqual(follow[0], 'combat')
+                    self.assertFalse(run.node_done)
+                    run.start_event_combat(follow[1])
+                    self.assertTrue(run.active is not None)
+                    win_and_collect(run)
+                    self.assertTrue(run.node_done)
+
+    def test_branch_deterministic_with_seed(self):
+        ev = content.EVENTS['goblin_gambler']
+        results = []
+        for s in range(20):
+            run = core.Run(4000 + s)
+            self.goto_event(run)
+            run.hero.gold = 30
+            core.apply_event(run, ev, 0)  # 押 30
+            results.append(run.hero.gold)
+        first = []
+        for _ in range(2):
+            run = core.Run(4000)
+            obj = self.goto_event(run)
+            run.hero.gold = 30
+            core.apply_event(run, obj, 0)
+            first.append(run.hero.gold)
+        self.assertEqual(first[0], first[1])
+        self.assertIn(60, results)   # 押中：30-30+60
+        self.assertIn(0, results)    # 押输：30-30
+
+    def test_followup_combat_blocks_leave(self):
+        run = core.Run(4001)
+        ev = content.EVENTS['mimic_chest']
+        self.goto_event(run)
+        lines, follow = core.apply_event(run, ev, 1)  # 识破先手
+        self.assertEqual(follow, ('combat', ['mimic']))
+        self.assertEqual(run.choices(), [])
+        with self.assertRaises(ValueError):
+            run.go(list(run.map.nodes)[3])
+
+    def test_altar_sacrifice_boundaries(self):
+        run = core.Run(4002)
+        ev = content.EVENTS['dark_altar']
+        self.goto_event(run)
+        run.hero.hp = 5
+        self.assertFalse(core.event_option_available(run, ev, 0))
+        lines, follow = core.apply_event(run, ev, 0)
+        self.assertTrue(any('撑不住' in l for l in lines))
+        self.assertEqual(run.hero.hp, 5)
+        self.assertFalse(run.node_done)
+        # 金币不足：赌博选项
+        run2 = core.Run(4003)
+        ev2 = content.EVENTS['goblin_gambler']
+        self.goto_event(run2)
+        run2.hero.gold = 10
+        lines2, _ = core.apply_event(run2, ev2, 0)
+        self.assertTrue(any('金币' in l for l in lines2))
+        self.assertFalse(run2.node_done)
+
+    def test_event_reward_effects_apply(self):
+        run = core.Run(4004)
+        ev = content.EVENTS['wounded_traveler']
+        self.goto_event(run)
+        run.hero.hp = 80
+        lines, _ = core.apply_event(run, ev, 0)  # hp-3 + common 遗物
+        self.assertEqual(run.hero.hp, 77)
+        self.assertEqual(len(run.hero.relics), 1)
+        self.assertTrue(run.node_done)
+        # 骨之祠祈祷：强化一张牌
+        run2 = core.Run(4005)
+        ev2 = content.EVENTS['shrine_of_bones']
+        self.goto_event(run2)
+        before = list(run2.hero.deck)
+        core.apply_event(run2, ev2, 0)
+        self.assertNotEqual(before, list(run2.hero.deck))
+        self.assertTrue(any(up for _c, up in run2.hero.deck))
+
+    def test_potion_cap_via_event(self):
+        run = core.Run(4006)
+        ev = content.EVENTS['ruined_forge']
+        self.goto_event(run)
+        run.hero.potions = ['p_blood', 'p_energy', 'p_fury']
+        lines, _ = core.apply_event(run, ev, 0)  # 分支可能给药水
+        self.assertLessEqual(len(run.hero.potions), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

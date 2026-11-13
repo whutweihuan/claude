@@ -983,6 +983,13 @@ class Run(object):
         self.node_done = True
         return []
 
+    def start_event_combat(self, enemy_ids):
+        node = self.map.nodes[self.current]
+        self.active = Combat(self.hero, list(enemy_ids), self.rng,
+                             layer_tier(node.layer))
+        self.active.start()
+        return self.active
+
     def close_shop(self):
         self.node_done = True
         return []
@@ -1138,3 +1145,134 @@ def buy_removal(run, deck_idx):
     run.hero.gold -= shop.remove_cost
     name = content.CARDS[cid].name + ('+' if up else '')
     return ['你与商人耳语几句，【%s】消失在火焰里。' % name]
+
+
+# ---------- 事件结算 ----------
+
+def _outcome_block_reason(run, outcomes):
+    for eff in outcomes:
+        op = eff[0]
+        if op == 'hp' and eff[1] < 0 and run.hero.hp + eff[1] <= 0:
+            return '你撑不住这股代价，放弃了尝试。'
+        if op == 'gold' and eff[1] < 0 and run.hero.gold + eff[1] < 0:
+            return '金币不足。'
+        if op == 'branch':
+            for _w, sub in eff[1]:
+                reason = _outcome_block_reason(run, sub)
+                if reason:
+                    return reason
+    return None
+
+
+def event_option_available(run, event, idx):
+    if not (0 <= idx < len(event.options)):
+        return False
+    return _outcome_block_reason(run, event.options[idx].outcome) is None
+
+
+def apply_event(run, event, idx):
+    """返回 (日志行, follow)。follow 为 None 或 ('combat', enemy_ids)。"""
+    if not (0 <= idx < len(event.options)):
+        return ['没有这个选项，请重新选择。'], None
+    opt = event.options[idx]
+    reason = _outcome_block_reason(run, opt.outcome)
+    if reason:
+        return [reason], None
+    lines = ['你选择：%s。' % opt.label]
+    follow = _exec_outcomes(run, opt.outcome, lines)
+    if follow is None:
+        run.finish_event()
+    return lines, follow
+
+
+def _exec_outcomes(run, outcomes, lines):
+    rng = run.rng
+    hero = run.hero
+    follow = None
+    for eff in outcomes:
+        op = eff[0]
+        if op == 'hp':
+            hero.hp += eff[1]
+            if hero.hp > hero.max_hp:
+                hero.hp = hero.max_hp
+            if eff[1] < 0:
+                lines.append('你失去 %d 点生命。' % -eff[1])
+            else:
+                lines.append('回复 %d 点生命。' % eff[1])
+        elif op == 'heal':
+            before = hero.hp
+            hero.hp = min(hero.max_hp, hero.hp + eff[1])
+            lines.append('回复 %d 点生命。' % (hero.hp - before))
+        elif op == 'gold':
+            hero.gold += eff[1]
+            if eff[1] > 0:
+                run.gold_earned += eff[1]
+                lines.append('获得 %d 金币。' % eff[1])
+            else:
+                lines.append('花费 %d 金币。' % -eff[1])
+        elif op == 'gain_potion_random':
+            msg, _ok = run.gain_potion()
+            lines.append(msg)
+        elif op == 'gain_relic_random':
+            pool = [rid for rid, r in content.RELICS.items()
+                    if r.rarity == eff[1]]
+            rid = rng.choice(pool)
+            run.add_relic(rid)
+            lines.append('你获得了遗物【%s】。' % content.RELICS[rid].name)
+        elif op == 'gain_gear_random':
+            kind, tier = eff[1], eff[2]
+            late = tier >= 2
+            if kind == 'weapon':
+                pool = (Run.CHEST_WEAPONS_LATE if late
+                        else Run.CHEST_WEAPONS_EARLY)
+                gid = rng.choice(pool)
+                hero.weapon = gid
+                lines.append('你换上了【%s】。'
+                             % content.WEAPONS[gid].name)
+            else:
+                pool = (Run.CHEST_ARMORS_LATE if late
+                        else Run.CHEST_ARMORS_EARLY)
+                gid = rng.choice(pool)
+                hero.armor = gid
+                lines.append('你穿上了【%s】。'
+                             % content.ARMORS[gid].name)
+        elif op == 'add_card_random':
+            pool = [cid for cid, c in content.CARDS.items()
+                    if content.CARD_RARITY[cid] == eff[1]]
+            cid = rng.choice(pool)
+            hero.deck.append((cid, False))
+            lines.append('你学会了【%s】。' % content.CARDS[cid].name)
+        elif op == 'upgrade_random_card':
+            slots = [i for i, (cid, up) in enumerate(hero.deck)
+                     if not up and content.CARDS[cid].upgrade]
+            if slots:
+                i = rng.choice(slots)
+                cid, _up = hero.deck[i]
+                hero.deck[i] = (cid, True)
+                lines.append('【%s+】被无名之神祝福了。'
+                             % content.CARDS[cid].name)
+            else:
+                lines.append('诸神对你的卡组无动于衷。')
+        elif op == 'remove_random_card':
+            if len(hero.deck) > 1:
+                i = rng.randrange(len(hero.deck))
+                cid, up = hero.deck.pop(i)
+                name = content.CARDS[cid].name + ('+' if up else '')
+                lines.append('【%s】莫名其妙地消失了。' % name)
+        elif op == 'start_combat':
+            follow = ('combat', list(eff[1]))
+        elif op == 'branch':
+            total = sum(w for w, _o in eff[1])
+            r = rng.randrange(total)
+            for w, sub in eff[1]:
+                if r < w:
+                    sub_follow = _exec_outcomes(run, sub, lines)
+                    if sub_follow is not None:
+                        follow = sub_follow
+                    break
+                r -= w
+        elif op == 'nothing':
+            pass
+        else:
+            raise ValueError('未知事件原语 %r' % (eff,))
+    return follow
