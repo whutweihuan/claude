@@ -420,5 +420,100 @@ class EventTests(unittest.TestCase):
         self.assertLessEqual(len(run.hero.potions), 3)
 
 
+import ui
+
+
+class FakeIO(object):
+    def __init__(self, inputs):
+        self.out = []
+        self._it = iter(inputs)
+
+    def write(self, s):
+        self.out.append(s)
+
+    def read(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise EOFError()
+
+    def clear(self):
+        pass
+
+
+def ui_for(run, inputs):
+    io = FakeIO(inputs)
+    return ui.UI(run, write=io.write, read=io.read, clear=io.clear), io
+
+
+class UITests(unittest.TestCase):
+
+    def test_map_screen_lists_choices(self):
+        run = core.Run(201)
+        u, io = ui_for(run, ['q', 'y'])
+        result = u.play()
+        self.assertEqual(result['outcome'], 'aborted')
+        text = '\n'.join(io.out)
+        for nid in run.map.entry_ids:
+            self.assertIn('节点 %d' % nid, text)
+        self.assertIn('战斗', text)
+
+    def test_combat_screen_budget(self):
+        run = core.Run(202)
+        run.hero.deck = [('strike', False)] * 10
+        run.hero.relics = ['horn']
+        run.go(run.map.entry_ids[0])
+        run.enter()
+        combat = run.start_event_combat(['goblin', 'wolf', 'slime'])
+        self.assertEqual(len(combat.hand), 7)
+        io = FakeIO([])
+        u = ui.UI(run, write=io.write, read=io.read, clear=io.clear)
+        u._draw_combat(combat)
+        self.assertLessEqual(len(io.out), 50)
+
+    def test_scripted_win(self):
+        run = core.Run(203)
+        run.hero.deck = [('heavy', False)] * 10
+        run.go(run.map.entry_ids[0])
+        run.enter()
+        # 单敌布阵，消除目标选择输入的歧义
+        run.active.enemies = [core.EnemyInstance(content.ENEMIES['goblin'], 1)]
+        u, io = ui_for(run, ['1', 'd', '1', '0', 'q', 'y'])
+        result = u.play()
+        text = '\n'.join(io.out)
+        self.assertIn('战斗胜利', text)
+        self.assertIsNone(run.pending)
+        self.assertTrue(run.node_done)
+        self.assertEqual(result['outcome'], 'aborted')
+
+    def test_invalid_inputs_reprompt(self):
+        run = core.Run(204)
+        run.go(run.map.entry_ids[0])
+        combat = run.enter()[1]
+        u, io = ui_for(run, ['zzz', '', '99', 'd'])
+        result = u.play()
+        text = '\n'.join(io.out)
+        reprompts = text.count('请重新')
+        self.assertGreaterEqual(reprompts, 3)
+        self.assertEqual(combat.turn, 2)
+        self.assertEqual(result['outcome'], 'aborted')
+
+    def test_eof_exits_gracefully(self):
+        run = core.Run(205)
+        u, io = ui_for(run, [])
+        result = u.play()
+        self.assertEqual(result['outcome'], 'aborted')
+
+    def test_event_and_campfire_menus(self):
+        run = core.Run(206)
+        node = find_node(run, 'event')
+        # 走到事件节点：手动定位一条可行入口路径
+        force_node(run, node)
+        u, io = ui_for(run, ['1', 'q', 'y'])
+        result = u.play()
+        self.assertGreater(len(io.out), 5)
+        self.assertEqual(result['outcome'], 'aborted')
+
+
 if __name__ == '__main__':
     unittest.main()

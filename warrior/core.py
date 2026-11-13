@@ -356,6 +356,7 @@ class Combat(object):
             'status': self.status,
             'hand': [{'idx': idx, 'name': content.CARDS[cid].name,
                       'cost': self._card_cost(content.CARDS[cid]),
+                      'text': self.effects_for(cid, up)[1],
                       'effects': self.effects_for(cid, up)[0],
                       'playable': self._card_cost(content.CARDS[cid])
                       <= self.energy,
@@ -750,6 +751,7 @@ class Run(object):
         self.active = None
         self.shop = None
         self._loot = None
+        self.node_obj = None
         self.seen_events = set()
         self.finished = False
         self.outcome = None
@@ -781,10 +783,12 @@ class Run(object):
         self.active = None
         self.shop = None
         self._loot = None
+        self.node_obj = None
 
     def enter(self):
         node = self.map.nodes[self.current]
         kind = node.kind
+        self.node_obj = None
         tier = layer_tier(node.layer)
         if kind == 'combat':
             ids = make_encounter(self.rng, node.layer)
@@ -804,12 +808,15 @@ class Run(object):
         if kind == 'campfire':
             return ('campfire', None)
         if kind == 'event':
-            return ('event', self._pick_event())
+            self.node_obj = self._pick_event()
+            return ('event', self.node_obj)
         if kind == 'chest':
             self._loot = self._make_loot(node.layer)
+            self.node_obj = self._loot
             return ('chest', self._loot)
         if kind == 'shop':
             self.shop = make_shop(self.rng, self.hero, node.layer)
+            self.node_obj = self.shop
             return ('shop', self.shop)
         raise ValueError('未知节点类型 %r' % kind)
 
