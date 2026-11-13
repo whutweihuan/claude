@@ -171,6 +171,9 @@ class WarriorGUI(object):
         self._logged_combat = None
         self._camp_forge_mode = False
         self._shop_remove_mode = False
+        self._camp_msg = None
+        self._event_msg = None
+        self._chest_msg = None
         self._last_act = {}
         self.show_map()
 
@@ -248,9 +251,9 @@ class WarriorGUI(object):
         targeting = (self._pending_card is not None
                      or self._pending_potion is not None)
         snap = combat.snapshot()
-        ttk.Label(outer, text='生命 %d/%d  格挡 %d  能量 %d  第 %d 回合'
-                  % (snap['hp'], snap['max_hp'], snap['block'],
-                     snap['energy'], snap['turn'])).pack(anchor='w')
+        ttk.Label(outer, text='格挡 %d  能量 %d  第 %d 回合'
+                  % (snap['block'], snap['energy'],
+                     snap['turn'])).pack(anchor='w')
         ef = ttk.Frame(outer)
         ef.pack(fill='x', pady=2)
         self.enemy_buttons = []
@@ -425,10 +428,22 @@ class WarriorGUI(object):
             return
         if self._debounced(('end_turn', 0)):
             return
-        self._pending_card = None
-        self._pending_potion = None
+        if (self._pending_card is not None
+                or self._pending_potion is not None):
+            self._pending_card = None
+            self._pending_potion = None
+            self._log(['已取消当前目标，回合未结束——'
+                       '再点一次「结束回合」确认。'])
+            self.show_combat()
+            return
         lines = combat.end_turn()
         self._after_action(lines)
+
+    def _leave_node(self):
+        self._camp_msg = None
+        self._event_msg = None
+        self._chest_msg = None
+        self.show_map()
 
     def _cancel_targeting(self):
         self._pending_card = None
@@ -484,6 +499,18 @@ class WarriorGUI(object):
         outer.pack(fill='both', expand=True, padx=12, pady=8)
         ttk.Label(outer, text='火堆噼啪作响。你可以做一件事。',
                   wraplength=900).pack(anchor='w')
+        msg = getattr(self, '_camp_msg', None)
+        if msg:
+            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w',
+                                                             pady=4)
+            self._camp_msg = None
+        if g.node_done:
+            self._camp_forge_mode = False
+            self.continue_btn = ttk.Button(
+                outer, text='继续前进', command=self._leave_node)
+            self.continue_btn.pack(anchor='w', pady=6)
+            self._fit()
+            return
         opts = g.campfire_options()
         row = ttk.Frame(outer)
         row.pack(pady=8)
@@ -516,19 +543,11 @@ class WarriorGUI(object):
                 self.forge_card_buttons[slot] = btn
                 widgets.append(btn)
             _flow_layout(grid, widgets, 6)
-        msg = getattr(self, '_camp_msg', None)
-        if msg:
-            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w',
-                                                             pady=4)
-            self._camp_msg = None
         self._fit()
 
     def _camp_after(self, lines):
-        if self.game.node_done:
-            self.show_map()
-        else:
-            self._camp_msg = ' '.join(lines)
-            self.show_campfire()
+        self._camp_msg = '\n'.join(lines)
+        self.show_campfire()
 
     def _camp_sleep(self):
         if self._debounced(('camp', 'sleep')):
@@ -570,6 +589,18 @@ class WarriorGUI(object):
                   font=('TkDefaultFont', 12)).pack(anchor='w')
         ttk.Label(outer, text=ev.text, wraplength=920,
                   justify='left').pack(anchor='w', pady=6)
+        msg = getattr(self, '_event_msg', None)
+        if msg:
+            for mline in msg.split('\n'):
+                ttk.Label(outer, text=mline, wraplength=900).pack(
+                    anchor='w')
+            self._event_msg = None
+        if g.node_done:
+            self.continue_btn = ttk.Button(
+                outer, text='继续前进', command=self._leave_node)
+            self.continue_btn.pack(anchor='w', pady=6)
+            self._fit()
+            return
         row = ttk.Frame(outer)
         row.pack(anchor='w', pady=4)
         self.event_option_buttons = []
@@ -580,10 +611,6 @@ class WarriorGUI(object):
             if not core.event_option_available(g, ev, i):
                 btn.state(['disabled'])
             self.event_option_buttons.append(btn)
-        msg = getattr(self, '_event_msg', None)
-        if msg:
-            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w')
-            self._event_msg = None
         self._fit()
 
     def _event_pick(self, idx):
@@ -594,21 +621,34 @@ class WarriorGUI(object):
         if follow is not None:
             g.start_event_combat(follow[1])
             self.show_screen()
-        elif g.node_done:
-            self.show_map()
-        else:
-            self._event_msg = ' '.join(lines)
-            self.show_event()
+            return
+        self._event_msg = '\n'.join(lines)
+        self.show_event()
 
     # ---------- 宝箱屏 ----------
 
     def show_chest(self):
         g = self.game
-        loot = g.node_obj
         self._clear()
         self._update_status()
         outer = ttk.Frame(self.container)
         outer.pack(fill='both', expand=True, padx=12, pady=8)
+        msg = getattr(self, '_chest_msg', None)
+        if msg:
+            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w',
+                                                             pady=6)
+            self._chest_msg = None
+        if g.node_done:
+            self.continue_btn = ttk.Button(
+                outer, text='继续前进', command=self._leave_node)
+            self.continue_btn.pack(anchor='w', pady=6)
+            self._fit()
+            return
+        loot = g.node_obj
+        if loot is None:
+            g.finish_event()
+            self.show_map()
+            return
         gear = (content.WEAPONS.get(loot['id'])
                 or content.ARMORS.get(loot['id']))
         ttk.Label(outer,
@@ -629,8 +669,9 @@ class WarriorGUI(object):
     def _chest_take(self, equip):
         if self._debounced(('chest', bool(equip))):
             return
-        self.game.take_chest(equip)
-        self.show_map()
+        lines = self.game.take_chest(equip)
+        self._chest_msg = '\n'.join(lines)
+        self.show_chest()
 
     # ---------- 奖励屏 ----------
 

@@ -638,6 +638,82 @@ if __name__ == '__main__':
     unittest.main()
 
 
+def all_texts(widget):
+    out = []
+
+    def rec(w):
+        try:
+            t = str(w.cget('text'))
+        except Exception:
+            t = ''
+        if t:
+            out.append(t)
+        for c in w.winfo_children():
+            rec(c)
+    rec(widget)
+    return out
+
+
+class FeedbackTests(GuiTestCase):
+    """人类试玩反馈：事件/宝箱/火堆结果可见；血量只出现一次；
+    选目标态结束回合两段式确认。"""
+
+    def test_event_result_feedback(self):
+        app = make_app(self.root, seed=7)
+        node = find_node(app.game, 'event')
+        force_node(app.game, node)
+        app.game.node_obj = content.EVENTS['goblin_gambler']
+        app.game.hero.gold = 100
+        app.show_screen()
+        app.event_option_buttons[2].invoke()  # 不赌
+        self.assertTrue(app.game.node_done)
+        self.assertTrue(any('你选择' in t for t in all_texts(app.container)))
+        self.assertTrue(hasattr(app, 'continue_btn'))
+        app.continue_btn.invoke()
+        self.assertTrue(hasattr(app, 'map_buttons'))
+
+    def test_chest_result_feedback(self):
+        app = make_app(self.root, seed=7)
+        force_node(app.game, find_node(app.game, 'chest'))
+        app.show_screen()
+        app.equip_btn.invoke()
+        self.assertTrue(app.game.node_done)
+        self.assertTrue(any('宝箱里有' in t for t in all_texts(app.container)))
+        app.continue_btn.invoke()
+        self.assertTrue(hasattr(app, 'map_buttons'))
+
+    def test_campfire_result_feedback(self):
+        app = make_app(self.root, seed=7)
+        force_node(app.game, find_node(app.game, 'campfire'))
+        app.show_screen()
+        app.sharpen_btn.invoke()
+        self.assertTrue(app.game.node_done)
+        self.assertTrue(any('磨得雪亮' in t for t in all_texts(app.container)))
+        app.continue_btn.invoke()
+        self.assertTrue(hasattr(app, 'map_buttons'))
+
+    def test_hp_shown_once_on_combat(self):
+        app = make_app(self.root, seed=7)
+        to_combat(app, enemies=['goblin'])
+        hits = sum(1 for t in all_texts(app.root) if '生命 80/80' in t)
+        self.assertEqual(hits, 1)
+
+    def test_end_turn_confirm_when_targeting(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin', 'wolf'],
+                           hand=['strike', 'defend', 'defend'])
+        app.hand_buttons[0].invoke()
+        self.assertEqual(app._pending_card, 0)
+        turn0 = combat.turn
+        app.end_btn.invoke()
+        self.assertEqual(combat.turn, turn0)          # 第一击：只取消
+        self.assertIsNone(app._pending_card)
+        self.assertIn('已取消当前目标',
+                      app.log_text.get('1.0', tk.END))
+        app.end_btn.invoke()                           # 第二击：真结束
+        self.assertEqual(combat.turn, turn0 + 1)
+
+
 class FinalFixTests(GuiTestCase):
     """终审修复轮回归（Critical 1 / Important 2/7 / Minor 升级项 8/9）。"""
 
@@ -685,18 +761,6 @@ class FinalFixTests(GuiTestCase):
         app.start_run(99)
         to_combat(app, enemies=['wolf'])
         self.assertGreater(len(app.hand_buttons), 0)
-
-    def test_end_turn_clears_targeting(self):
-        app = self.make()
-        combat = to_combat(app, enemies=['goblin', 'wolf'],
-                           hand=['strike', 'defend', 'defend'])
-        app.hand_buttons[0].invoke()
-        self.assertEqual(app._pending_card, 0)
-        app.end_btn.invoke()
-        self.assertIsNone(app._pending_card)
-        hp0 = combat.enemies[0].hp
-        app._on_enemy(0)  # 不应误打新回合的牌
-        self.assertEqual(combat.enemies[0].hp, hp0)
 
     def test_card_play_clears_potion_pending(self):
         app = self.make()
