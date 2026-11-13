@@ -213,5 +213,107 @@ class TargetingTests(GuiTestCase):
         self.assertEqual(app.game.hero.potions, [])
 
 
+from test_run import find_node, force_node  # noqa: E402
+
+
+class NodeScreensTests(GuiTestCase):
+
+    def app_at(self, kind, seed=7):
+        app = make_app(self.root, seed)
+        node = find_node(app.game, kind)
+        force_node(app.game, node)
+        app.show_screen()
+        return app
+
+    def test_campfire_buttons_state(self):
+        app = self.app_at('campfire')
+        self.assertTrue(app.sleep_btn.instate(('disabled',)))  # 满血
+        app.sharpen_btn.invoke()
+        self.assertEqual(app.game.hero.weapon_sharpen, 1)
+        self.assertTrue(app.game.node_done)
+
+    def test_campfire_forge_grid(self):
+        app = self.app_at('campfire', seed=8)
+        app.forge_btn.invoke()
+        slot = next(i for i, (c, u) in enumerate(app.game.hero.deck)
+                    if c == 'strike')
+        app.forge_card_buttons[slot].invoke()
+        self.assertEqual(app.game.hero.deck[slot], ('strike', True))
+        self.assertTrue(app.game.node_done)
+
+    def test_event_option_disabled_and_apply(self):
+        app = self.app_at('event')
+        app.game.node_obj = content.EVENTS['goblin_gambler']
+        app.show_screen()
+        app.game.hero.gold = 0
+        app.show_screen()
+        self.assertTrue(app.event_option_buttons[0].instate(('disabled',)))
+        app.event_option_buttons[2].invoke()  # 不赌
+        self.assertTrue(app.game.node_done)
+
+    def test_event_followup_opens_combat(self):
+        app = self.app_at('event')
+        app.game.node_obj = content.EVENTS['mimic_chest']
+        app.show_screen()
+        app.event_option_buttons[1].invoke()  # 识破先手
+        self.assertIsNotNone(app.game.active)
+        texts = ' '.join(b.cget('text') for b in app.enemy_buttons)
+        self.assertIn('宝箱怪', texts)
+
+    def test_chest_take_or_leave(self):
+        app = self.app_at('chest')
+        loot = dict(app.game.node_obj)
+        app.equip_btn.invoke()
+        self.assertEqual(app.game.hero.gold, loot['gold'])
+        if loot['kind'] == 'weapon':
+            self.assertEqual(app.game.hero.weapon, loot['id'])
+        else:
+            self.assertEqual(app.game.hero.armor, loot['id'])
+        app2 = self.app_at('chest', seed=9)
+        loot2 = dict(app2.game.node_obj)
+        weapon2 = app2.game.hero.weapon
+        app2.gold_only_btn.invoke()
+        self.assertEqual(app2.game.hero.gold, loot2['gold'])
+        self.assertEqual(app2.game.hero.weapon, weapon2)
+
+    def _pending_combat_win(self, app):
+        g = app.game
+        g.go(g.map.entry_ids[0])
+        g.enter()
+        for e in g.active.enemies:
+            e.hp = 0
+        g.active.status = 'win'
+        g.combat_finished()
+        app.show_screen()
+        return g
+
+    def test_rewards_take_card(self):
+        app = make_app(self.root, seed=7)
+        g = self._pending_combat_win(app)
+        n0 = len(g.hero.deck)
+        self.assertEqual(len(app.card_choice_buttons), len(g.pending['card_choices']))
+        app.card_choice_buttons[0].invoke()
+        self.assertEqual(len(g.hero.deck), n0 + 1)
+        self.assertIsNone(g.pending)
+
+    def test_rewards_skip(self):
+        app = make_app(self.root, seed=7)
+        g = self._pending_combat_win(app)
+        n0 = len(g.hero.deck)
+        app.skip_btn.invoke()
+        self.assertEqual(len(g.hero.deck), n0)
+        self.assertTrue(g.node_done)
+
+    def test_rewards_relic_choice(self):
+        app = make_app(self.root, seed=7)
+        g = app.game
+        g.pending = {'gold': 0, 'relic_choices': ['ember', 'purse', 'torch'],
+                     'relic_drop': None, 'card_choices': [], 'lines': []}
+        app.show_screen()
+        app.relic_choice_buttons[0].invoke()
+        self.assertIn('ember', g.hero.relics)
+        self.assertTrue(g.node_done)
+
+
 if __name__ == '__main__':
     unittest.main()

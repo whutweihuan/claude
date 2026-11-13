@@ -435,20 +435,210 @@ class WarriorGUI(object):
         text.configure(state='disabled')
         text.pack(fill='both', expand=True)
 
-    def show_rewards(self):
-        self._placeholder('奖励屏（待实装）')
+    # ---------- 火堆屏 ----------
 
     def show_campfire(self):
-        self._placeholder('火堆屏（待实装）')
+        g = self.game
+        self._clear()
+        self._update_status()
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=12, pady=8)
+        ttk.Label(outer, text='火堆噼啪作响。你可以做一件事。',
+                  wraplength=900).pack(anchor='w')
+        opts = g.campfire_options()
+        row = ttk.Frame(outer)
+        row.pack(pady=8)
+        self.sleep_btn = ttk.Button(row, text='睡一觉',
+                                    command=self._camp_sleep)
+        self.forge_btn = ttk.Button(row, text='锻造一张牌',
+                                    command=self._camp_forge)
+        self.sharpen_btn = ttk.Button(
+            row, text='打磨武器（已用 %d/3）' % g.hero.weapon_sharpen,
+            command=self._camp_sharpen)
+        self.leave_btn = ttk.Button(row, text='什么也不做',
+                                    command=self._camp_leave)
+        for btn, o in zip((self.sleep_btn, self.forge_btn,
+                           self.sharpen_btn), opts[:3]):
+            btn.pack(side='left', padx=4)
+            if not o['available']:
+                btn.state(['disabled'])
+        self.leave_btn.pack(side='left', padx=4)
+        self.forge_card_buttons = {}
+        if getattr(self, '_camp_forge_mode', False):
+            grid = ttk.Frame(outer)
+            grid.pack(pady=4)
+            widgets = []
+            for slot in opts[1]['cards']:
+                cid, up = g.hero.deck[slot]
+                card = content.CARDS[cid]
+                btn = ttk.Button(
+                    grid, text='%s\n%s' % (card.name, card.text),
+                    command=lambda s=slot: self._camp_forge_pick(s))
+                self.forge_card_buttons[slot] = btn
+                widgets.append(btn)
+            _flow_layout(grid, widgets, self.WINDOW_W - 80)
+        msg = getattr(self, '_camp_msg', None)
+        if msg:
+            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w',
+                                                             pady=4)
+            self._camp_msg = None
+
+    def _camp_after(self, lines):
+        if self.game.node_done:
+            self.show_map()
+        else:
+            self._camp_msg = ' '.join(lines)
+            self.show_campfire()
+
+    def _camp_sleep(self):
+        self._camp_after(self.game.campfire('sleep'))
+
+    def _camp_sharpen(self):
+        self._camp_after(self.game.campfire('sharpen'))
+
+    def _camp_leave(self):
+        self._camp_after(self.game.campfire('leave'))
+
+    def _camp_forge(self):
+        self._camp_forge_mode = True
+        self.show_campfire()
+
+    def _camp_forge_pick(self, slot):
+        self._camp_forge_mode = False
+        self._camp_after(self.game.campfire('forge', slot))
+
+    # ---------- 事件屏 ----------
 
     def show_event(self):
-        self._placeholder('事件屏（待实装）')
+        g = self.game
+        ev = g.node_obj
+        self._clear()
+        self._update_status()
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=12, pady=8)
+        ttk.Label(outer, text='【%s】' % ev.title,
+                  font=('TkDefaultFont', 12)).pack(anchor='w')
+        ttk.Label(outer, text=ev.text, wraplength=920,
+                  justify='left').pack(anchor='w', pady=6)
+        row = ttk.Frame(outer)
+        row.pack(anchor='w', pady=4)
+        self.event_option_buttons = []
+        for i, opt in enumerate(ev.options):
+            btn = ttk.Button(row, text=opt.label,
+                             command=lambda idx=i: self._event_pick(idx))
+            btn.pack(side='left', padx=4, pady=2)
+            if not core.event_option_available(g, ev, i):
+                btn.state(['disabled'])
+            self.event_option_buttons.append(btn)
+        msg = getattr(self, '_event_msg', None)
+        if msg:
+            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w')
+            self._event_msg = None
 
-    def show_shop(self):
-        self._placeholder('商店屏（待实装）')
+    def _event_pick(self, idx):
+        g = self.game
+        lines, follow = core.apply_event(g, g.node_obj, idx)
+        if follow is not None:
+            g.start_event_combat(follow[1])
+            self.show_screen()
+        elif g.node_done:
+            self.show_map()
+        else:
+            self._event_msg = ' '.join(lines)
+            self.show_event()
+
+    # ---------- 宝箱屏 ----------
 
     def show_chest(self):
-        self._placeholder('宝箱屏（待实装）')
+        g = self.game
+        loot = g.node_obj
+        self._clear()
+        self._update_status()
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=12, pady=8)
+        gear = (content.WEAPONS.get(loot['id'])
+                or content.ARMORS.get(loot['id']))
+        ttk.Label(outer,
+                  text='宝箱里有 %d 金币，还有一件【%s】——\n%s'
+                       % (loot['gold'], gear.name, gear.text),
+                  wraplength=900).pack(anchor='w', pady=6)
+        row = ttk.Frame(outer)
+        row.pack(pady=6)
+        self.equip_btn = ttk.Button(row, text='装备它',
+                                    command=lambda: self._chest_take(True))
+        self.gold_only_btn = ttk.Button(
+            row, text='只拿金币走人',
+            command=lambda: self._chest_take(False))
+        self.equip_btn.pack(side='left', padx=4)
+        self.gold_only_btn.pack(side='left', padx=4)
+
+    def _chest_take(self, equip):
+        self.game.take_chest(equip)
+        self.show_map()
+
+    # ---------- 奖励屏 ----------
+
+    def show_rewards(self):
+        g = self.game
+        p = g.pending
+        self._clear()
+        self._update_status()
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=12, pady=8)
+        if p['lines']:
+            ttk.Label(outer, text='  '.join(p['lines']),
+                      wraplength=900).pack(anchor='w')
+        self.relic_choice_buttons = []
+        self.card_choice_buttons = []
+        row = ttk.Frame(outer)
+        row.pack(pady=6)
+        if p['relic_choices']:
+            ttk.Label(outer, text='战利品·遗物').pack(anchor='w')
+            for i, rid in enumerate(p['relic_choices']):
+                relic = content.RELICS[rid]
+                btn = ttk.Button(row,
+                                 text='%s\n%s' % (relic.name, relic.text),
+                                 command=lambda idx=i: self._reward_relic(idx))
+                btn.pack(side='left', padx=4)
+                self.relic_choice_buttons.append(btn)
+            self.skip_btn = ttk.Button(outer, text='不拿了',
+                                       command=self._reward_skip)
+        else:
+            ttk.Label(outer,
+                      text='战利品·卡牌（%d 选 1）' % len(p['card_choices'])
+                      ).pack(anchor='w')
+            for i, (cid, up) in enumerate(p['card_choices']):
+                card = content.CARDS[cid]
+                text = card.upgrade['text'] if up else card.text
+                btn = ttk.Button(
+                    row, text='%s%s\n%d费 %s' % (card.name,
+                                                 '+' if up else '',
+                                                 card.cost, text),
+                    command=lambda idx=i: self._reward_card(idx))
+                btn.pack(side='left', padx=4)
+                self.card_choice_buttons.append(btn)
+            self.skip_btn = ttk.Button(outer, text='跳过',
+                                       command=self._reward_skip)
+        self.skip_btn.pack(anchor='w', pady=6)
+
+    def _reward_relic(self, i):
+        self.game.choose_relic(i)
+        self.show_map()
+
+    def _reward_card(self, i):
+        self.game.take_card(i)
+        self.show_map()
+
+    def _reward_skip(self):
+        g = self.game
+        if g.pending['relic_choices']:
+            g.skip_relic()
+        else:
+            g.skip_card()
+        self.show_map()
+
+    def show_shop(self):
+        self._placeholder('商店屏（任务 5 实装）')
 
     def show_end(self):
         self._placeholder('结算屏（待实装）')
