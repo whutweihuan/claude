@@ -15,6 +15,17 @@ def _default_seed():
     return time.time_ns() % 1000000
 
 
+def parse_seed(raw):
+    """'①' 这类 isdigit() 为真但 int() 会抛错的输入按空处理。"""
+    raw = (raw or '').strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def session(seed=None, read=None, write=None, records_path=None,
             clear=None):
     """一局接一局的会话。返回 'exited'。IO 参数可注入（测试用）。"""
@@ -60,7 +71,7 @@ def main():
         raw = input().strip()
     except EOFError:
         raw = ''
-    seed = int(raw) if raw.isdigit() else None
+    seed = parse_seed(raw)
     if seed is None:
         seed = _default_seed()
         print('本次种子：%d' % seed)

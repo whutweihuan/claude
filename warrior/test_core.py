@@ -272,6 +272,37 @@ class CombatEnemyTests(unittest.TestCase):
         self.assertEqual(c2.status, 'lose')
         self.assertEqual(c2.hero.hp, 0)
 
+    def test_enemy_block_resets_at_own_turn(self):
+        c = make_combat(content.STARTER_DECK, ['slime'], seed=61)
+        c.start()
+        self.set_next_move(c, 0, name='凝缩', kind='block', weight=1, block=6)
+        c.end_turn()
+        self.assertEqual(c.enemies[0].block, 6)
+        self.set_next_move(c, 0, name='凝缩', kind='block', weight=1, block=6)
+        c.end_turn()
+        self.assertEqual(c.enemies[0].block, 6)  # 不跨回合累积
+
+    def test_boss_intent_matches_actual_damage(self):
+        drawn = False
+        for seed in range(60):
+            c = make_combat(content.STARTER_DECK, ['demon_lord'], seed=seed)
+            c.start()
+            c.enemies[0].hp = 60  # 触发二阶段
+            c.end_turn()
+            e = c.enemies[0]
+            if e.pending_move.name != '灭世一击':
+                continue
+            drawn = True
+            d = e.pending_move.damage + e.strength + e.dmg_add
+            self.assertEqual(e.intent, '攻击 %d' % d)
+            c.block = 0
+            c.vulnerable = 0
+            hp0 = c.hero.hp
+            c.end_turn()
+            self.assertEqual(hp0 - c.hero.hp, d)
+            break
+        self.assertTrue(drawn, '60 个种子没抽到灭世一击')
+
     def test_elite_cycle_moves_learnable(self):
         c = make_combat(content.STARTER_DECK, ['golem'], seed=27)
         c.start()

@@ -22,6 +22,27 @@ def default_records():
     }
 
 
+_INT_FIELDS = ('runs', 'wins', 'deaths', 'best_layer', 'total_kills')
+
+
+def _validate_shape(data):
+    """合法 JSON 也要过类型关：类型不符按损坏处理，避免 update 阶段崩溃。"""
+    if not isinstance(data, dict):
+        raise ValueError('not a dict')
+    for key in _INT_FIELDS:
+        value = data.get(key, 0)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError('bad field %s' % key)
+    seed = data.get('last_seed', 0)
+    if seed is not None and (isinstance(seed, bool)
+                             or not isinstance(seed, int)):
+        raise ValueError('bad last_seed')
+    history = data.get('history', [])
+    if not isinstance(history, list) \
+            or any(not isinstance(item, dict) for item in history):
+        raise ValueError('bad history')
+
+
 def load_records(path=DEFAULT_PATH):
     """返回 (records, status)；status ∈ ok/missing/corrupt/io_error。
 
@@ -37,10 +58,7 @@ def load_records(path=DEFAULT_PATH):
         return default_records(), 'io_error'
     try:
         data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise ValueError('not a dict')
-        if not isinstance(data.get('history', []), list):
-            raise ValueError('bad history')
+        _validate_shape(data)
     except ValueError:
         stamp = time.strftime('%Y%m%d-%H%M%S')
         target = os.path.join(os.path.dirname(os.path.abspath(path)),

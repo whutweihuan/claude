@@ -156,7 +156,7 @@ class Combat(object):
             n += m.get('first_turn_draw', 0)
         lines.extend(self._draw(n))
         if self.status == 'playing':
-            self._gen_intents()
+            lines.extend(self._gen_intents())
         return lines
 
     def _draw(self, n):
@@ -174,6 +174,7 @@ class Combat(object):
         return lines
 
     def _gen_intents(self):
+        lines = []
         for e in self.enemies:
             if not e.alive:
                 e.intent = None
@@ -183,8 +184,12 @@ class Combat(object):
                     and e.hp <= e.max_hp / 2.0:
                 e.in_phase2 = True
                 e._move_idx = 0
+                lines.append('【%s】发出咆哮，形态崩变！' % e.name)
+            if e.in_phase2 and d.phase2_per_turn_strength:
+                e.strength += d.phase2_per_turn_strength
             e.pending_move = self._pick_move(e)
             e.intent = format_intent(e.pending_move, e)
+        return lines
 
     def _pick_move(self, enemy):
         pool = enemy.defn.phase2_moves if enemy.in_phase2 else enemy.defn.moves
@@ -245,13 +250,7 @@ class Combat(object):
                     e.hp = 0
                     lines.append('【%s】被击败！' % e.name)
                     continue
-            if e.defn.phase2_at_half and not e.in_phase2 \
-                    and e.hp <= e.max_hp / 2.0:
-                e.in_phase2 = True
-                e._move_idx = 0
-                lines.append('【%s】发出咆哮，形态崩变！' % e.name)
-            if e.in_phase2 and e.defn.phase2_per_turn_strength:
-                e.strength += e.defn.phase2_per_turn_strength
+            e.block = 0  # 敌人格挡在其行动开始时清零（规格 6.2）
             mv = e.pending_move or self._pick_move(e)
             e.pending_move = None
             lines.extend(self._exec_move(e, mv))

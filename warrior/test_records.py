@@ -76,6 +76,19 @@ class RecordsTests(unittest.TestCase):
         self.assertEqual(glob.glob(os.path.join(self.tmp.name,
                                                 'records.corrupt-*')), [])
 
+    def test_wrong_field_types_treated_as_corrupt(self):
+        # 审查发现 5：合法 JSON 但字段类型错误，不得进入 update 后崩溃
+        with open(self.path, 'w', encoding='utf-8') as f:
+            f.write('{"runs": "很多", "wins": 1}')
+        data, status = records.load_records(self.path)
+        self.assertEqual(status, 'corrupt')
+        self.assertEqual(data, records.default_records())
+        self.assertFalse(os.path.exists(self.path))
+        with open(self.path, 'w', encoding='utf-8') as f:
+            f.write('{"history": "不是列表"}')
+        _data, status2 = records.load_records(self.path)
+        self.assertEqual(status2, 'corrupt')
+
     def test_update_records_counters(self):
         data = records.default_records()
         for i in range(12):

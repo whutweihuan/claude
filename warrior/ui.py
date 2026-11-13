@@ -13,6 +13,14 @@ class _Abort(Exception):
     pass
 
 
+def _parse_int(s):
+    """isdigit() 为真不代表 int() 可用（①/² 等），统一安全解析。"""
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
 class UI(object):
 
     def __init__(self, run, write=None, read=None, clear=None):
@@ -108,8 +116,8 @@ class UI(object):
             self.w('输入编号移动；s=查看行囊；q=放弃本局')
             raw = self.r()
             if raw == 'q':
-                self._ask_confirm_quit()
-                return None
+                self._ask_confirm_quit()  # 反悔则继续重打菜单
+                continue
             if raw == 's':
                 self._details()
                 continue
@@ -196,6 +204,15 @@ class UI(object):
         self.w('生命 %d/%d (格挡%d)  能量 %d  金币 %d  第%d回合'
                % (snap['hp'], snap['max_hp'], snap['block'],
                   snap['energy'], snap['gold'], snap['turn']))
+        hero_stats = []
+        if combat.strength:
+            hero_stats.append('力量+%d' % combat.strength)
+        if combat.vulnerable:
+            hero_stats.append('易伤%d' % combat.vulnerable)
+        if combat.poison:
+            hero_stats.append('毒%d' % combat.poison)
+        if hero_stats:
+            self.w('你的状态: ' + '  '.join(hero_stats))
         alive = [(i, e) for i, e in enumerate(snap['enemies'])
                  if e['alive']]
         for i, e in alive:
@@ -319,10 +336,12 @@ class UI(object):
                 raw = self.r()
                 if raw == '0':
                     self._echo(run.skip_relic())
-                elif raw.isdigit() and 1 <= int(raw) <= len(p['relic_choices']):
-                    self._echo(run.choose_relic(int(raw) - 1))
                 else:
-                    self.w('看不懂，请重新选择。')
+                    pick = _parse_int(raw)
+                    if pick is not None and 1 <= pick <= len(p['relic_choices']):
+                        self._echo(run.choose_relic(pick - 1))
+                    else:
+                        self.w('看不懂，请重新选择。')
             return
         if p['card_choices']:
             while run.pending is not None:
@@ -336,11 +355,12 @@ class UI(object):
                 raw = self.r()
                 if raw == '0':
                     self._echo(run.skip_card())
-                elif raw.isdigit() \
-                        and 1 <= int(raw) <= len(p['card_choices']):
-                    self._echo(run.take_card(int(raw) - 1))
                 else:
-                    self.w('看不懂，请重新选择。')
+                    pick = _parse_int(raw)
+                    if pick is not None and 1 <= pick <= len(p['card_choices']):
+                        self._echo(run.take_card(pick - 1))
+                    else:
+                        self.w('看不懂，请重新选择。')
 
     # ---------- 火堆 ----------
 
@@ -371,7 +391,8 @@ class UI(object):
                 pick = self.r()
                 if pick == '0':
                     continue
-                if pick.isdigit() and int(pick) - 1 in slots:
+                pick_n = _parse_int(pick)
+                if pick_n is not None and pick_n - 1 in slots:
                     self._echo(run.campfire('forge', int(pick) - 1))
                 else:
                     self.w('看不懂，请重新输入。')
@@ -395,11 +416,11 @@ class UI(object):
                 tail = '' if core_avail(run, event, i) else '（现在不行）'
                 self.w(' %d. %s%s' % (i + 1, opt.label, tail))
             raw = self.r()
-            if not raw.isdigit() or not (1 <= int(raw) <=
-                                         len(event.options)):
+            pick = _parse_int(raw)
+            if pick is None or not (1 <= pick <= len(event.options)):
                 self.w('看不懂，请重新选择。')
                 continue
-            lines, follow = core_apply(run, event, int(raw) - 1)
+            lines, follow = core_apply(run, event, pick - 1)
             self._echo(lines)
             if follow is None and run.node_done:
                 return
@@ -451,12 +472,14 @@ class UI(object):
                     self.w('  %d.【%s%s】' % (j + 1,
                                              content.CARDS[cid].name,
                                              '+' if up else ''))
-                pick = self.r()
-                if pick.isdigit() and int(pick) >= 1:
-                    self._echo(core_buy_removal(run, int(pick) - 1))
-            elif raw.isdigit() and 1 <= int(raw) <= len(shop.slots):
-                self._echo(core_buy(run, int(raw) - 1))
+                pick = _parse_int(self.r())
+                if pick is not None and pick >= 1:
+                    self._echo(core_buy_removal(run, pick - 1))
             else:
+                pick = _parse_int(raw)
+                if pick is not None and 1 <= pick <= len(shop.slots):
+                    self._echo(core_buy(run, pick - 1))
+                    continue
                 self.w('看不懂，请重新选择。')
 
 

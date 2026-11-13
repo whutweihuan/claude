@@ -507,6 +507,52 @@ class UITests(unittest.TestCase):
         result = u.play()
         self.assertEqual(result['outcome'], 'aborted')
 
+    def test_quit_undo_reprompts(self):
+        # 审查发现 1（Critical）：q 之后反悔不得崩溃
+        run = core.Run(211)
+        u, io = ui_for(run, ['q', 'n', 'q', 'y'])
+        result = u.play()
+        self.assertEqual(result['outcome'], 'aborted')
+        text = '\n'.join(io.out)
+        self.assertGreaterEqual(text.count('节点'), 4)  # 菜单被重打
+
+    def test_fancy_digit_inputs_reprompt(self):
+        # 审查发现 2：isdigit() 为真但 int() 抛错的字符（①/²）不得 traceback
+        run = core.Run(212)
+        run.go(run.map.entry_ids[0])
+        run.enter()
+        for e in run.active.enemies:
+            e.hp = 0
+        run.active.status = 'win'
+        run.combat_finished()
+        u, io = ui_for(run, ['①', '²', '0', 'q', 'y'])
+        result = u.play()
+        text = '\n'.join(io.out)
+        self.assertGreaterEqual(text.count('请重新'), 2)
+        self.assertEqual(result['outcome'], 'aborted')
+
+    def test_hero_statuses_visible(self):
+        # 审查发现 10（升级处理）：英雄的力量/易伤/毒必须可见，否则玩家在盲打中受伤
+        run = core.Run(213)
+        run.go(run.map.entry_ids[0])
+        combat = run.enter()[1]
+        combat.strength = 1
+        combat.vulnerable = 2
+        combat.poison = 3
+        io = FakeIO([])
+        u = ui.UI(run, write=io.write, read=io.read, clear=io.clear)
+        u._draw_combat(combat)
+        text = '\n'.join(io.out)
+        self.assertIn('力量+1', text)
+        self.assertIn('易伤2', text)
+        self.assertIn('毒3', text)
+
+    def test_parse_seed_rejects_fancy_digits(self):
+        import main as main_mod
+        self.assertIsNone(main_mod.parse_seed('①'))
+        self.assertIsNone(main_mod.parse_seed(''))
+        self.assertEqual(main_mod.parse_seed('123'), 123)
+
     def test_event_and_campfire_menus(self):
         run = core.Run(206)
         node = find_node(run, 'event')
