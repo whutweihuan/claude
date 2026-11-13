@@ -170,6 +170,7 @@ class WarriorGUI(object):
         self._combat_log = []
         self._logged_combat = None
         self._camp_forge_mode = False
+        self._camp_confirm_slot = None
         self._shop_remove_mode = False
         self._camp_msg = None
         self._event_msg = None
@@ -251,9 +252,13 @@ class WarriorGUI(object):
         targeting = (self._pending_card is not None
                      or self._pending_potion is not None)
         snap = combat.snapshot()
-        ttk.Label(outer, text='格挡 %d  能量 %d  第 %d 回合'
-                  % (snap['block'], snap['energy'],
-                     snap['turn'])).pack(anchor='w')
+        bonus = (combat.mods.get('attack_bonus', 0)
+                 + combat.mods.get('attack_damage_base', 0))
+        ttk.Label(outer,
+                  text='格挡 %d  能量 %d  第 %d 回合%s'
+                       % (snap['block'], snap['energy'], snap['turn'],
+                          ('  攻击加值 +%d' % bonus) if bonus else '')
+                  ).pack(anchor='w')
         ef = ttk.Frame(outer)
         ef.pack(fill='x', pady=2)
         self.enemy_buttons = []
@@ -530,6 +535,26 @@ class WarriorGUI(object):
                 btn.state(['disabled'])
         self.leave_btn.pack(side='left', padx=4)
         self.forge_card_buttons = {}
+        confirm_slot = getattr(self, '_camp_confirm_slot', None)
+        if confirm_slot is not None:
+            cid, _up = g.hero.deck[confirm_slot]
+            card = content.CARDS[cid]
+            ttk.Label(
+                outer,
+                text='【%s】→【%s+】\n%s → %s\n花掉今晚的火堆确认锻造？'
+                     % (card.name, card.name, card.text,
+                        card.upgrade['text']),
+                wraplength=900).pack(anchor='w', pady=4)
+            crow = ttk.Frame(outer)
+            crow.pack(anchor='w')
+            self.confirm_btn = ttk.Button(
+                crow, text='确认锻造', command=self._camp_forge_confirm)
+            self.cancel_forge_btn = ttk.Button(
+                crow, text='再想想', command=self._camp_forge_cancel)
+            self.confirm_btn.pack(side='left', padx=4)
+            self.cancel_forge_btn.pack(side='left', padx=4)
+            self._fit()
+            return
         if getattr(self, '_camp_forge_mode', False):
             grid = ttk.Frame(outer)
             grid.pack(pady=4)
@@ -573,8 +598,20 @@ class WarriorGUI(object):
     def _camp_forge_pick(self, slot):
         if self._debounced(('camp_forge_pick', slot)):
             return
+        self._camp_confirm_slot = slot
+        self.show_campfire()
+
+    def _camp_forge_confirm(self):
+        slot = getattr(self, '_camp_confirm_slot', None)
+        if slot is None:
+            return
+        self._camp_confirm_slot = None
         self._camp_forge_mode = False
         self._camp_after(self.game.campfire('forge', slot))
+
+    def _camp_forge_cancel(self):
+        self._camp_confirm_slot = None
+        self.show_campfire()
 
     # ---------- 事件屏 ----------
 

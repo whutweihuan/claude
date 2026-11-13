@@ -150,6 +150,7 @@ class Combat(object):
         self._cards_played_this_turn = 0
         if self.powers.get('strength_per_turn'):
             self.strength += self.powers['strength_per_turn']
+            lines.append('持续力量 +%d。' % self.powers['strength_per_turn'])
         n = self.BASE_DRAW + m.get('draw_per_turn', 0) \
             + self.powers.get('draw_per_turn', 0)
         if self.turn == 1:
@@ -223,6 +224,7 @@ class Combat(object):
         lines = []
         if self.powers.get('block_per_turn'):
             self.block += self.powers['block_per_turn']
+            lines.append('持续格挡 +%d。' % self.powers['block_per_turn'])
         if self.mods.get('turn_end_heal'):
             before = self.hero.hp
             self.hero.hp = min(self.hero.max_hp,

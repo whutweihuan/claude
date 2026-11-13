@@ -178,6 +178,17 @@ class CombatPlayerTests(unittest.TestCase):
         c.play_card(0)
         self.assertEqual(c.enemies[0].hp, 32 - 9 - 6)
 
+    def test_war_drum_effective_lines_logged(self):
+        deck = [('war_drum', False)] * 2 + [('defend', False)] * 8
+        c = make_combat(deck, ['goblin'], seed=16)
+        c.start()
+        seed_hand(c, ['war_drum'])
+        c.play_card(0)
+        lines = c.end_turn()
+        self.assertTrue(any('持续格挡' in l for l in lines), lines)
+        self.assertTrue(any('持续力量' in l for l in lines), lines)
+        self.assertEqual(c.strength, 1)
+
     def test_exhaust_card_leaves_combat(self):
         deck = [('rip', False)] + [('defend', False)] * 9
         c = make_combat(deck, ['knight'], seed=14)
