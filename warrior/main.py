@@ -1,11 +1,27 @@
 # -*- coding: utf-8 -*-
-"""勇士冒险入口：python main.py 即玩。"""
+"""勇士冒险入口：python main.py 开窗口玩，--text 走命令行。"""
 import os
+import sys
 import time
 
 import core
 import records
 import ui
+
+
+def run_mode(argv):
+    return 'text' if '--text' in list(argv) else 'gui'
+
+
+def apply_result_to_records(result, path):
+    """一局结算写盘：win/dead 计入，aborted 跳过。返回状态字符串。"""
+    if result.get('outcome') not in ('win', 'dead'):
+        return 'skipped'
+    data, status = records.load_records(path)
+    if status == 'io_error':
+        return 'io_error'
+    data = records.update_records(data, result)
+    return records.save_records(path, data)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RECORDS_PATH = os.path.join(HERE, 'records.json')
@@ -65,7 +81,27 @@ def session(seed=None, read=None, write=None, records_path=None,
             return 'exited'
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if run_mode(argv) == 'gui':
+        _gui_main()
+    else:
+        _text_main()
+
+
+def _gui_main():
+    import gui as gui_mod
+    from tkinter import Tk
+    gui_mod._enable_dpi_awareness()
+    root = Tk()
+    app = gui_mod.WarriorGUI(
+        root,
+        on_finish=lambda r: apply_result_to_records(r, RECORDS_PATH))
+    app.run()
+    print('勇士收剑。下次山道再见。')
+
+
+def _text_main():
     print('输入随机种子（回车=随机，可分享给朋友复现同一张地图）：')
     try:
         raw = input().strip()
