@@ -200,6 +200,20 @@ class Combat(object):
             r -= m.weight
         return pool[-1]
 
+    def use_potion(self, slot, target=None):
+        if self.status != 'playing':
+            return ['现在不在战斗中。']
+        if not (0 <= slot < len(self.hero.potions)):
+            return ['没有这瓶药水。']
+        pid = self.hero.potions[slot]
+        pot = content.POTIONS[pid]
+        self.hero.potions.pop(slot)
+        lines = ['你喝下【%s】。' % pot.name]
+        for eff in pot.effects:
+            lines.extend(apply_effect(self.hero, self, eff, target))
+        self._check_end()
+        return lines
+
     def end_turn(self):
         lines = []
         if self.powers.get('block_per_turn'):
@@ -795,9 +809,8 @@ class Run(object):
             self._loot = self._make_loot(node.layer)
             return ('chest', self._loot)
         if kind == 'shop':
-            # 任务 8：此处装配 make_shop
-            self.shop = None
-            return ('shop', None)
+            self.shop = make_shop(self.rng, self.hero, node.layer)
+            return ('shop', self.shop)
         raise ValueError('未知节点类型 %r' % kind)
 
     def _pick_event(self):
@@ -974,6 +987,32 @@ class Run(object):
         self.node_done = True
         return []
 
+    # ---- 局外药水 ----
+
+    def use_potion_outside(self, slot):
+        if not (0 <= slot < len(self.hero.potions)):
+            return ['没有这瓶药水。']
+        pid = self.hero.potions[slot]
+        if not potion_outside_usable(pid):
+            return ['【%s】必须在战斗中使用。' % content.POTIONS[pid].name]
+        self.hero.potions.pop(slot)
+        n = content.POTIONS[pid].effects[0][1]
+        before = self.hero.hp
+        self.hero.hp = min(self.hero.max_hp, self.hero.hp + n)
+        return ['你喝下【%s】，回复 %d 点生命。'
+                % (content.POTIONS[pid].name, self.hero.hp - before)]
+
+    def gain_potion(self, pid=None):
+        """事件/商店入包：满 3 瓶时返回提示且物品不损失。"""
+        pool = list(content.POTIONS) if pid is None else [pid]
+        if pid is None:
+            pid = self.rng.choice(pool)
+        if len(self.hero.potions) >= 3:
+            return ['药水背包已满（3/3），【%s】被你留在了原地。'
+                    % content.POTIONS[pid].name], False
+        self.hero.potions.append(pid)
+        return ['你获得了药水【%s】。' % content.POTIONS[pid].name], True
+
     # ---- 遗物 ----
 
     def add_relic(self, rid):
@@ -991,3 +1030,111 @@ class Run(object):
         self.pending = None
         self.stats = {'depth': self.depth_reached, 'kills': self.kills,
                       'gold_earned': self.gold_earned, 'seed': self.seed}
+
+
+# ---------- 商店与药水 ----------
+
+CARD_PRICE = {'common': 45, 'uncommon': 65, 'rare': 90}
+WEAPON_PRICE = {'longsword': 100, 'spear': 100, 'flame': 100,
+                'twinblades': 120, 'axe': 150}
+ARMOR_PRICE = {'cloth': 60, 'leather': 80, 'spiked': 100, 'guardian': 110,
+               'plate': 130}
+RELIC_PRICE = {'common': 110, 'uncommon': 140, 'rare': 175}
+POTION_PRICE = 45
+REMOVE_COST = 65
+
+
+@dataclass
+class Slot:
+    kind: str
+    content_id: str
+    base_price: int
+    price: int
+    sold: bool = False
+
+
+class Shop(object):
+    def __init__(self, slots, remove_cost):
+        self.slots = slots
+        self.remove_cost = remove_cost
+
+
+def make_shop(rng, hero, layer):
+    disc = merged_mods(hero).get('shop_discount', 1.0)
+    slots = []
+
+    def add(kind, cid, base):
+        slots.append(Slot(kind, cid, base, int(base * disc)))
+
+    for cid, _up in card_reward_choice(rng, layer, 2):
+        add('card', cid, CARD_PRICE[content.CARD_RARITY[cid]])
+    wid = rng.choice(list(WEAPON_PRICE))
+    add('weapon', wid, WEAPON_PRICE[wid])
+    aid = rng.choice(list(ARMOR_PRICE))
+    add('armor', aid, ARMOR_PRICE[aid])
+    rid = rng.choice(relic_pool('shop'))
+    add('relic', rid, RELIC_PRICE[content.RELICS[rid].rarity])
+    for pid in rng.sample(list(content.POTIONS), 2):
+        add('potion', pid, POTION_PRICE)
+    return Shop(slots, int(REMOVE_COST * disc))
+
+
+POTION_OUTSIDE_OPS = frozenset(['heal'])
+
+
+def potion_outside_usable(pid):
+    return all(eff[0] in POTION_OUTSIDE_OPS
+               for eff in content.POTIONS[pid].effects)
+
+
+def _give_potion(hero):
+    """入包药水（商店/事件共用）；满 3 瓶返回 False，物品不损失。"""
+    if len(hero.potions) >= 3:
+        return False
+    return True
+
+
+def buy(run, slot_idx):
+    shop = run.shop
+    if shop is None:
+        return ['这里没有商店。']
+    if not (0 <= slot_idx < len(shop.slots)):
+        return ['没有这件商品，请重新选择。']
+    slot = shop.slots[slot_idx]
+    if slot.sold:
+        return ['这件已经售罄了。']
+    if run.hero.gold < slot.price:
+        return ['金币不足，还差 %d。' % (slot.price - run.hero.gold)]
+    if slot.kind == 'potion' and len(run.hero.potions) >= 3:
+        return ['药水背包已满（3/3），先用手里的。']
+    hero = run.hero
+    hero.gold -= slot.price
+    slot.sold = True
+    if slot.kind == 'card':
+        hero.deck.append((slot.content_id, False))
+        return ['你买下了【%s】。' % content.CARDS[slot.content_id].name]
+    if slot.kind == 'weapon':
+        hero.weapon = slot.content_id
+        return ['你换上了【%s】。' % content.WEAPONS[slot.content_id].name]
+    if slot.kind == 'armor':
+        hero.armor = slot.content_id
+        return ['你穿上了【%s】。' % content.ARMORS[slot.content_id].name]
+    if slot.kind == 'relic':
+        run.add_relic(slot.content_id)
+        return ['你请下了【%s】。' % content.RELICS[slot.content_id].name]
+    hero.potions.append(slot.content_id)
+    return ['你买下了【%s】。' % content.POTIONS[slot.content_id].name]
+
+
+def buy_removal(run, deck_idx):
+    shop = run.shop
+    if shop is None:
+        return ['这里没有商店。']
+    if run.hero.gold < shop.remove_cost:
+        return ['金币不足，删牌服务要 %d 金币。' % shop.remove_cost]
+    if not (0 <= deck_idx < len(run.hero.deck)):
+        return ['卡组里没有这张牌。']
+    cid, up = run.hero.deck.pop(deck_idx)
+    run.hero.gold -= shop.remove_cost
+    name = content.CARDS[cid].name + ('+' if up else '')
+    return ['你与商人耳语几句，【%s】消失在火焰里。' % name]

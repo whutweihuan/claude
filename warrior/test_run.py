@@ -217,5 +217,110 @@ class RunFlowTests(unittest.TestCase):
         self.assertEqual(run.hero.gold, 30)
 
 
+def to_shop(run, seed=None):
+    node = find_node(run, 'shop')
+    kind, obj = force_node(run, node)
+    assert kind == 'shop'
+    return obj
+
+
+class ShopTests(unittest.TestCase):
+
+    def test_shop_inventory_shape_and_price(self):
+        run = core.Run(80)
+        shop = to_shop(run)
+        counts = {}
+        for s in shop.slots:
+            counts[s.kind] = counts.get(s.kind, 0) + 1
+        self.assertEqual(counts, {'card': 2, 'weapon': 1, 'armor': 1,
+                                  'relic': 1, 'potion': 2})
+        for s in shop.slots:
+            self.assertGreater(s.price, 0)
+            self.assertFalse(s.sold)
+        self.assertEqual(shop.remove_cost, 65)
+        # hag_hat：同 rng 下现价为 8 折
+        run2 = core.Run(80)
+        run2.hero.relics.append('hag_hat')
+        shop2 = to_shop(run2)
+        for a, b in zip(shop.slots, shop2.slots):
+            self.assertEqual(b.price, int(a.base_price * 0.8))
+
+    def test_buy_and_spend_rules(self):
+        run = core.Run(81)
+        shop = to_shop(run)
+        run.hero.gold = 1000
+        wi = [i for i, s in enumerate(shop.slots) if s.kind == 'weapon'][0]
+        wid = shop.slots[wi].content_id
+        lines = core.buy(run, wi)
+        self.assertEqual(run.hero.weapon, wid)
+        self.assertTrue(shop.slots[wi].sold)
+        lines2 = core.buy(run, wi)
+        self.assertTrue(any('售罄' in l or '卖光' in l for l in lines2))
+        # 金币不足
+        run2 = core.Run(82)
+        shop2 = to_shop(run2)
+        run2.hero.gold = 0
+        ri = [i for i, s in enumerate(shop2.slots) if s.kind == 'relic'][0]
+        price = shop2.slots[ri].price
+        lines3 = core.buy(run2, ri)
+        self.assertTrue(any('金币' in l for l in lines3))
+        self.assertFalse(shop2.slots[ri].sold)
+        self.assertEqual(run2.hero.gold, 0)
+
+    def test_remove_card_service(self):
+        run = core.Run(83)
+        to_shop(run)
+        run.hero.gold = 100
+        before = len(run.hero.deck)
+        core.buy_removal(run, 0)
+        self.assertEqual(len(run.hero.deck), before - 1)
+        self.assertEqual(run.hero.gold, 100 - run.shop.remove_cost)
+
+    def test_shop_edges(self):
+        run = core.Run(84)
+        shop = to_shop(run)
+        run.hero.gold = 0
+        for s in shop.slots:
+            s.sold = True
+        lines = core.buy(run, 0)
+        self.assertTrue(any('售罄' in l or '卖光' in l for l in lines))
+
+    def test_potion_in_and_out_of_combat(self):
+        run = core.Run(85)
+        node = None
+        for n in run.map.nodes.values():
+            if n.kind == 'combat':
+                node = n
+                break
+        force_node(run, node)
+        run.hero.potions = ['p_blood', 'p_energy', 'p_acid']
+        run.hero.hp = 30
+        lines = run.active.use_potion(0)
+        self.assertEqual(run.hero.hp, 44)
+        self.assertEqual(run.hero.potions, ['p_energy', 'p_acid'])
+        e_before = run.active.energy
+        run.active.use_potion(0)
+        self.assertEqual(run.active.energy, e_before + 2)
+        # 局外：治疗类可用，攻击/能量类不可
+        run.hero.potions = ['p_acid', 'p_blood']
+        bad = run.use_potion_outside(0)
+        self.assertTrue(any('战斗中' in l for l in bad))
+        self.assertEqual(len(run.hero.potions), 2)
+        good = run.use_potion_outside(1)
+        self.assertTrue(good)
+        self.assertEqual(run.hero.potions, ['p_acid'])
+
+    def test_potion_cap_three(self):
+        run = core.Run(86)
+        shop = to_shop(run)
+        run.hero.gold = 1000
+        run.hero.potions = ['p_blood', 'p_energy', 'p_fury']
+        pi = [i for i, s in enumerate(shop.slots) if s.kind == 'potion'][0]
+        lines = core.buy(run, pi)
+        self.assertTrue(any('满' in l for l in lines))
+        self.assertFalse(shop.slots[pi].sold)
+        self.assertEqual(len(run.hero.potions), 3)
+
+
 if __name__ == '__main__':
     unittest.main()
