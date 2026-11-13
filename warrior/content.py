@@ -219,6 +219,218 @@ POTIONS = {
 }
 
 
+@dataclass
+class Move:
+    name: str
+    kind: str            # 'attack' | 'block' | 'buff' | 'debuff' | 'poison'
+    weight: int
+    damage: int = 0
+    hits: int = 1
+    block: int = 0
+    strength: int = 0
+    vulnerable: int = 0
+    poison: int = 0
+
+
+@dataclass
+class Enemy:
+    id: str
+    name: str
+    hp: int
+    moves: List[Move]
+    is_elite: bool = False
+    is_boss: bool = False
+    cycle: bool = False
+    phase2_at_half: bool = False
+    phase2_per_turn_strength: int = 0
+    phase2_moves: List[Move] = field(default_factory=list)
+
+
+@dataclass
+class EventOption:
+    label: str
+    outcome: List[Tuple]
+
+
+@dataclass
+class GameEvent:
+    id: str
+    title: str
+    text: str
+    options: List[EventOption]
+
+
+EVENT_PRIMITIVES = frozenset([
+    'hp', 'heal', 'gold', 'gain_potion_random', 'gain_relic_random',
+    'gain_gear_random', 'add_card_random', 'upgrade_random_card',
+    'remove_random_card', 'start_combat', 'branch', 'nothing',
+])
+
+RELIC_RARITIES = ('common', 'uncommon', 'rare')
+
+
+def _mv(name, kind, weight, damage=0, hits=1, block=0, strength=0,
+        vulnerable=0, poison=0):
+    return Move(name, kind, weight, damage, hits, block, strength,
+                vulnerable, poison)
+
+
+ENEMIES = {}
+
+
+def _e(enemy):
+    ENEMIES[enemy.id] = enemy
+
+
+_e(Enemy('goblin', '哥布林', 14,
+         [_mv('乱砍', 'attack', 3, damage=5), _mv('竖盾', 'block', 1, block=4)]))
+_e(Enemy('wolf', '野狼', 12,
+         [_mv('撕咬连击', 'attack', 3, damage=3, hits=2),
+          _mv('猛扑', 'attack', 1, damage=6)]))
+_e(Enemy('slime', '史莱姆', 20,
+         [_mv('酸液拍打', 'attack', 2, damage=4),
+          _mv('凝缩', 'block', 2, block=6)]))
+_e(Enemy('bandit', '强盗', 24,
+         [_mv('弯刀', 'attack', 3, damage=8),
+          _mv('磨刀+格挡', 'buff', 1, block=6, strength=1)]))
+_e(Enemy('archer', '骷髅弓手', 16,
+         [_mv('三连射', 'attack', 3, damage=4, hits=3),
+          _mv('蓄力一箭', 'attack', 1, damage=9)]))
+_e(Enemy('imp', '小恶魔', 18,
+         [_mv('火球', 'attack', 2, damage=7),
+          _mv('嘲讽诅咒', 'debuff', 1, vulnerable=2),
+          _mv('毒尘', 'poison', 1, poison=3)]))
+_e(Enemy('knight', '黑暗骑士', 32,
+         [_mv('重剑横扫', 'attack', 3, damage=11),
+          _mv('铁壁姿态', 'buff', 1, block=8, strength=2)]))
+_e(Enemy('mimic', '宝箱怪', 20,
+         [_mv('假箱子咬合', 'attack', 3, damage=9, hits=2),
+          _mv('伪装收缩', 'block', 1, block=5)]))
+_e(Enemy('golem', '石魔像', 58,
+         [_mv('岩甲', 'block', 1, block=12),
+          _mv('蓄能', 'buff', 1, strength=2),
+          _mv('巨拳', 'attack', 1, damage=9, hits=2)],
+         is_elite=True, cycle=True))
+_e(Enemy('assassin', '影刺客', 48,
+         [_mv('影刃连刺', 'attack', 1, damage=4, hits=3),
+          _mv('致命一式', 'attack', 1, damage=10, vulnerable=1),
+          _mv('烟雾', 'block', 1, block=6)],
+         is_elite=True, cycle=True))
+_e(Enemy('demon_lord', '魔王', 160,
+         [_mv('魔王斩', 'attack', 1, damage=12),
+          _mv('黑暗壁垒', 'block', 1, block=10),
+          _mv('炼狱双重', 'attack', 1, damage=6, hits=2, vulnerable=1)],
+         is_boss=True, cycle=True, phase2_at_half=True,
+         phase2_per_turn_strength=2,
+         phase2_moves=[_mv('狂暴连斩', 'attack', 3, damage=8, hits=2),
+                       _mv('灭世一击', 'attack', 2, damage=15)]))
+
+ELITE_IDS = ('golem', 'assassin')
+BOSS_ID = 'demon_lord'
+
+ENCOUNTERS = [
+    (1, 2, [('goblin', 3), ('wolf', 3), ('slime', 2)], 2),
+    (3, 5, [('goblin', 2), ('wolf', 2), ('slime', 2), ('bandit', 3),
+            ('archer', 3)], 3),
+    (6, 8, [('bandit', 2), ('archer', 2), ('imp', 3), ('knight', 2),
+            ('slime', 1)], 3),
+    (9, 11, [('knight', 3), ('archer', 2), ('imp', 2), ('bandit', 2)], 3),
+]
+
+
+def _ev(eid, title, text, options):
+    EVENTS[eid] = GameEvent(eid, title, text,
+                            [EventOption(l, o) for l, o in options])
+
+
+EVENTS = {}
+
+_ev('wounded_traveler', '受伤的旅人',
+    '山路边倒着一名旅人，腿被落石砸中。他看见你的剑，眼里闪过一丝希望——'
+    '还有你背囊里露出的绷带。',
+    [('救助他（耽误行程，损失些体力）',
+      [('hp', -3), ('gain_relic_random', 'common')]),
+     ('搜走他的财物',
+      [('gold', 25), ('branch', [(1, [('start_combat', ['wolf'])]),
+                                (1, [('nothing',)])])]),
+     ('离开', [('nothing',)])])
+
+_ev('goblin_gambler', '赌博地精',
+    '一块歪斜的桌后，地精摇晃着三只贝壳："猜中了，金币翻倍；猜错了，留下买路财。"'
+    '桌上是你的钱袋，桌下是它同伙的眼睛。',
+    [('押上 30 金币',
+      [('gold', -30),
+       ('branch', [(1, [('gold', 60)]), (1, [('nothing',)])])]),
+     ('掀桌抢钱（可能有埋伏）',
+      [('gold', 45),
+       ('branch', [(1, [('start_combat', ['bandit', 'imp'])]),
+                   (2, [('nothing',)])])]),
+     ('不赌', [('nothing',)])])
+
+_ev('dark_altar', '黑暗祭坛',
+    '林间空地上立着一座无名祭坛，槽中残留着暗色痕迹。你不确定那是铁锈，'
+    '还是别的什么。祭坛上的黑石微微发烫。',
+    [('割掌献祭 8 点生命，取走黑石',
+      [('hp', -8), ('gain_relic_random', 'uncommon')]),
+     ('砸了祭坛，捡走值钱的',
+      [('gain_gear_random', 'weapon', 2),
+       ('branch', [(1, [('hp', -6)]), (1, [('start_combat', ['slime'])])])]),
+     ('离开', [('nothing',)])])
+
+_ev('ruined_forge', '铁匠铺废墟',
+    '烧塌的铁匠铺还留着半炉余温。灰烬下或许埋着没被熔掉的家伙，'
+    '也可能埋着惊扰死者的代价。',
+    [('翻找灰烬',
+      [('branch', [(2, [('gain_gear_random', 'weapon', 1)]),
+                   (1, [('hp', -6)]),
+                   (1, [('gain_potion_random',)])])]),
+     ('离开', [('nothing',)])])
+
+_ev('merchant_corpse', '商人的尸体',
+    '货车翻了，商人死于劫掠。钱袋还鼓着——劫匪也许还没走远。'
+    '他睁着的眼望着你，像在问最后一个愿望。',
+    [('搜刮货物',
+      [('gold', 40), ('gain_potion_random',),
+       ('branch', [(1, [('start_combat', ['bandit'])]),
+                   (2, [('nothing',)])])]),
+     ('挖个坑安葬他',
+      [('branch', [(1, [('gain_relic_random', 'common')]),
+                   (2, [('nothing',)])])])])
+
+_ev('hot_spring', '温泉',
+    '岩缝间冒着白汽的泉水，暖得很安心。水壶是空的，'
+    '而赶路的人总说这种地方浪费时间。',
+    [('泡一会儿', [('heal', 12)]),
+     ('灌满水壶带走', [('gain_potion_random',)]),
+     ('匆匆路过', [('nothing',)])])
+
+_ev('shrine_of_bones', '骨之祠',
+    '用巨兽骨骸搭起的小祠，供着无名之人的遗物。祭司说过：跪下的人带走祝福，'
+    '伸手的人带走骨头的怒火。',
+    [('跪下祈祷', [('upgrade_random_card',)]),
+     ('拿走供品',
+      [('gold', 55), ('remove_random_card',),
+       ('branch', [(1, [('start_combat', ['knight'])]),
+                   (2, [('nothing',)])])])])
+
+_ev('mimic_chest', '会咬人的箱子',
+    '角落里有一只精致的宝箱，锁扣是牙做的——你见过这种货色。'
+    '它也在等你伸手。',
+    [('硬开（付点血）',
+      [('hp', -10), ('gain_relic_random', 'uncommon')]),
+     ('识破它，先拔剑', [('start_combat', ['mimic'])]),
+     ('走开', [('nothing',)])])
+
+_ev('wandering_bard', '流浪诗人',
+    '诗人拨着断弦的鲁特琴："勇士，为您的传说谱一首？还是先听完这首，'
+    '再决定要不要付钱？"',
+    [('听完一曲', [('heal', 4)]),
+     ('给小费 25 金币，请他教一手',
+      [('gold', -25), ('add_card_random', 'uncommon')]),
+     ('点一曲《屠魔》',
+      [('gold', -10), ('gain_potion_random',)])])
+
+
 def _check_effects(effects, where):
     if not isinstance(effects, list) or not effects:
         raise ValueError('%s: effects 必须是非空列表' % where)
@@ -256,9 +468,69 @@ def validate_content():
                     raise ValueError('gear %s: 未知词条 %r' % (gid, key))
     for pid, pot in POTIONS.items():
         _check_effects(pot.effects, 'potion ' + pid)
+    for eid, enemy in ENEMIES.items():
+        if len(enemy.moves) < 2:
+            raise ValueError('enemy %s: 招式不足' % eid)
+        for m in enemy.moves:
+            if m.kind not in ('attack', 'block', 'buff', 'debuff', 'poison'):
+                raise ValueError('enemy %s: 招式 kind=%r' % (eid, m.kind))
+            if m.kind == 'attack' and m.damage <= 0:
+                raise ValueError('enemy %s: 攻击招式缺伤害' % eid)
+            if m.weight <= 0:
+                raise ValueError('enemy %s: 招式 weight=%r' % (eid, m.weight))
+        if enemy.phase2_at_half and not enemy.phase2_moves:
+            raise ValueError('enemy %s: 缺二阶段招式' % eid)
+    if BOSS_ID not in ENEMIES or not ENEMIES[BOSS_ID].is_boss:
+        raise ValueError('BOSS_ID 非法')
+    for eid in ELITE_IDS:
+        if eid not in ENEMIES or not ENEMIES[eid].is_elite:
+            raise ValueError('精英 %s 非法' % eid)
+    for a, b, pool, max_count in ENCOUNTERS:
+        if a > b or not (1 <= max_count <= 3):
+            raise ValueError('ENCOUNTERS 区间/数量非法')
+        for mid, w in pool:
+            if mid not in ENEMIES or w <= 0:
+                raise ValueError('ENCOUNTERS 引用敌人非法: %s' % mid)
+            if ENEMIES[mid].is_boss or ENEMIES[mid].is_elite:
+                raise ValueError('ENCOUNTERS 不应引用精英/boss: %s' % mid)
+    _check_event_outcomes(
+        [eff for ev in EVENTS.values() for opt in ev.options
+         for eff in opt.outcome], 'events')
+    for ev in EVENTS.values():
+        if not (2 <= len(ev.options) <= 3):
+            raise ValueError('event %s: 选项数非法' % ev.id)
     names = [c.name for c in CARDS.values()] \
         + [g.name for g in WEAPONS.values()] \
         + [g.name for g in ARMORS.values()] \
-        + [p.name for p in POTIONS.values()]
+        + [p.name for p in POTIONS.values()] \
+        + [e.name for e in ENEMIES.values()] \
+        + [ev.title for ev in EVENTS.values()]
     if len(set(names)) != len(names):
         raise ValueError('存在重名条目')
+
+
+def _check_event_outcomes(effs, where):
+    for eff in effs:
+        if not isinstance(eff, tuple) or not eff:
+            raise ValueError('%s: 事件原语必须是元组: %r' % (where, eff))
+        op = eff[0]
+        if op not in EVENT_PRIMITIVES:
+            raise ValueError('%s: 未知事件原语 %r' % (where, op))
+        if op == 'hp' or op == 'gold':
+            if not isinstance(eff[1], int):
+                raise ValueError('%s: %s 需要整数' % (where, op))
+        elif op in ('gain_relic_random', 'add_card_random'):
+            if eff[1] not in RELIC_RARITIES:
+                raise ValueError('%s: 稀有度非法 %r' % (where, eff[1]))
+        elif op == 'gain_gear_random':
+            if eff[1] not in ('weapon', 'armor'):
+                raise ValueError('%s: 装备类别非法 %r' % (where, eff[1]))
+        elif op == 'start_combat':
+            for mid in eff[1]:
+                if mid not in ENEMIES:
+                    raise ValueError('%s: 引战目标非法 %s' % (where, mid))
+        elif op == 'branch':
+            for w, outcomes in eff[1]:
+                if w <= 0:
+                    raise ValueError('%s: 分支权重非法 %r' % (where, w))
+                _check_event_outcomes(outcomes, where + '.branch')
