@@ -607,3 +607,95 @@ def settle_combat(hero, rng, layer, kind='normal'):
             lines.append('炭炉石温暖着你：回复 %d 点生命。'
                          % (hero.hp - before))
     return result
+
+
+# ---------- 地图生成 ----------
+
+NORMAL_LAYERS = 10
+BOSS_LAYER = 11
+ELITE_LAYERS = (6, 9)
+CAMPFIRE_LAYERS = (4, 7, 8, 10)
+
+
+@dataclass
+class MapNode:
+    id: int
+    layer: int
+    kind: str
+    next: list = field(default_factory=list)
+
+
+class GameMap(object):
+    def __init__(self, nodes, entry_ids, boss_id):
+        self.nodes = {n.id: n for n in nodes}
+        self.entry_ids = entry_ids
+        self.boss_id = boss_id
+
+    def layer_nodes(self, layer):
+        return [n for n in self.nodes.values() if n.layer == layer]
+
+
+def generate_map(rng):
+    counts = [2] + [1] * (NORMAL_LAYERS - 1)
+    remaining = rng.randint(14, 19) - sum(counts)
+    while remaining > 0:
+        i = rng.randrange(1, NORMAL_LAYERS)
+        if counts[i] < 3:
+            counts[i] += 1
+            remaining -= 1
+    nodes = []
+    by_layer = {}
+    nid = 0
+    for layer in range(1, NORMAL_LAYERS + 1):
+        lst = []
+        for _ in range(counts[layer - 1]):
+            nid += 1
+            node = MapNode(nid, layer, 'combat')
+            nodes.append(node)
+            lst.append(node)
+        by_layer[layer] = lst
+
+    def free_node(layer):
+        cands = [n for n in by_layer[layer] if n.kind == 'combat']
+        node = rng.choice(cands)
+        return node
+
+    for layer in ELITE_LAYERS:
+        free_node(layer).kind = 'elite'
+    for layer in CAMPFIRE_LAYERS:
+        free_node(layer).kind = 'campfire'
+    shop_cands = [n for l in range(2, 9) for n in by_layer[l]
+                  if n.kind == 'combat']
+    rng.choice(shop_cands).kind = 'shop'
+    event_cands = [n for n in nodes if n.kind == 'combat'
+                   and n.layer > 1]
+    for node in rng.sample(event_cands, 2):
+        node.kind = 'event'
+    rest = [n for n in nodes if n.kind == 'combat' and n.layer > 1]
+    for node in rest:
+        node.kind = rng.choices(['combat', 'event', 'chest'],
+                                weights=[5, 2, 2])[0]
+
+    boss_id = nid + 1
+    boss = MapNode(boss_id, BOSS_LAYER, 'boss')
+    nodes.append(boss)
+
+    for layer in range(1, NORMAL_LAYERS):
+        cur = by_layer[layer]
+        nxt = by_layer[layer + 1]
+        have_parent = set()
+        for node in cur:
+            k = 1 if len(nxt) == 1 else rng.choice([1, 2])
+            for child in rng.sample(nxt, k):
+                if child.id not in node.next:
+                    node.next.append(child.id)
+                have_parent.add(child.id)
+        for child in nxt:
+            if child.id not in have_parent:
+                parent = rng.choice(cur)
+                parent.next.append(child.id)
+                have_parent.add(child.id)
+    for node in by_layer[NORMAL_LAYERS]:
+        node.next.append(boss_id)
+
+    return GameMap(nodes, [n.id for n in by_layer[1]], boss_id)

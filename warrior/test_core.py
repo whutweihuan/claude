@@ -538,5 +538,77 @@ class HookTests(unittest.TestCase):
         content.validate_content()
 
 
+class MapGenTests(unittest.TestCase):
+
+    def test_invariants_over_1000_maps(self):
+        for s in range(1000):
+            m = core.generate_map(random.Random(s))
+            nodes = list(m.nodes.values())
+            kinds = [n.kind for n in nodes]
+            self.assertTrue(15 <= len(kinds) <= 20, s)
+            self.assertEqual(kinds.count('elite'), 2, s)
+            self.assertEqual(kinds.count('boss'), 1, s)
+            self.assertEqual(kinds.count('campfire') >= 3, True, s)
+            self.assertGreaterEqual(kinds.count('shop'), 1, s)
+            self.assertGreaterEqual(kinds.count('event'), 2, s)
+            self.assertEqual(len(m.entry_ids), 2, s)
+            for nid in m.entry_ids:
+                self.assertEqual(m.nodes[nid].kind, 'combat', s)
+                self.assertEqual(m.nodes[nid].layer, 1, s)
+            for n in nodes:
+                if n.kind == 'elite':
+                    self.assertIn(n.layer, (6, 9), s)
+                if n.layer in (1, 2):
+                    self.assertNotEqual(n.kind, 'elite', s)
+            for target_layer in (4, 7, 8, 10):
+                self.assertTrue(
+                    any(n.layer == target_layer and n.kind == 'campfire'
+                        for n in nodes), (s, target_layer))
+            self.assertEqual(m.nodes[m.boss_id].layer, 11, s)
+            self.assertEqual(m.nodes[m.boss_id].kind, 'boss', s)
+
+    def test_every_node_reachable_and_progresses(self):
+        for s in range(200):
+            m = core.generate_map(random.Random(s))
+            for n in m.nodes.values():
+                if n.kind == 'boss':
+                    self.assertEqual(n.next, [], s)
+                    continue
+                self.assertTrue(len(n.next) >= 1, s)
+                for nid in n.next:
+                    self.assertEqual(m.nodes[nid].layer, n.layer + 1, s)
+            # 入口可达所有节点
+            seen = set(m.entry_ids)
+            frontier = list(m.entry_ids)
+            while frontier:
+                cur = m.nodes[frontier.pop()]
+                for nid in cur.next:
+                    if nid not in seen:
+                        seen.add(nid)
+                        frontier.append(nid)
+            self.assertEqual(seen, set(m.nodes), s)
+            # 任意节点存在到 boss 的通路
+            for n in m.nodes.values():
+                stack, visited = [n.id], set()
+                found = False
+                while stack:
+                    cid = stack.pop()
+                    if cid == m.boss_id:
+                        found = True
+                        break
+                    if cid in visited:
+                        continue
+                    visited.add(cid)
+                    stack.extend(m.nodes[cid].next)
+                self.assertTrue(found, (s, n.id))
+
+    def test_same_seed_same_map(self):
+        a = core.generate_map(random.Random(777))
+        b = core.generate_map(random.Random(777))
+        self.assertEqual(
+            [(n.layer, n.kind, tuple(n.next)) for n in a.nodes.values()],
+            [(n.layer, n.kind, tuple(n.next)) for n in b.nodes.values()])
+
+
 if __name__ == '__main__':
     unittest.main()
