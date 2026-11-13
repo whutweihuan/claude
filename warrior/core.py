@@ -594,9 +594,9 @@ def settle_combat(hero, rng, layer, kind='normal'):
     tier = layer_tier(layer)
     lines = []
     if kind == 'elite':
-        gold = rng.randint(30, 45)
+        gold = rng.randint(33, 50)
     else:
-        gold = rng.randint(12, 18) + tier * 4
+        gold = rng.randint(13, 20) + tier * 4
     if mods.get('gold_mult'):
         gold = int(gold * mods['gold_mult'])
     hero.gold += gold
@@ -612,7 +612,7 @@ def settle_combat(hero, rng, layer, kind='normal'):
                 choices.append(pick)
         result['relic_choices'] = choices
     else:
-        if rng.random() < 0.15:
+        if rng.random() < 0.2:
             result['relic_drop'] = rng.choice(relic_pool('common'))
         n = 3 + int(mods.get('card_reward_extra', 0))
         result['card_choices'] = card_reward_choice(rng, layer, n)
@@ -802,7 +802,8 @@ class Run(object):
             self.active.start()
             return ('elite', self.active)
         if kind == 'boss':
-            self.active = Combat(self.hero, [content.BOSS_ID], self.rng, 3)
+            # 规格 6.10 的 boss 血量 160 是字面终值，不随 tier 放大
+            self.active = Combat(self.hero, [content.BOSS_ID], self.rng, 1)
             self.active.start()
             return ('boss', self.active)
         if kind == 'campfire':
@@ -958,6 +959,9 @@ class Run(object):
             self.node_done = True
             return ['你把武器磨得雪亮（攻击伤害 +%d）。'
                     % self.hero.weapon_sharpen]
+        if kind == 'leave':
+            self.node_done = True
+            return ['你只烤了烤手，继续赶路。']
         return ['火堆没有这个选项。']
 
     # ---- 宝箱 / 事件 / 商店 ----

@@ -352,8 +352,11 @@ class UI(object):
             for i, o in enumerate(opts):
                 tail = '' if o['available'] else '（不可用）'
                 self.w(' %d. %s%s' % (i + 1, o['text'], tail))
+            self.w(' 4. 什么也不做，继续赶路')
             raw = self.r()
-            if raw == '1':
+            if raw == '4':
+                self._echo(run.campfire('leave'))
+            elif raw == '1':
                 self._echo(run.campfire('sleep'))
             elif raw == '2':
                 slots = opts[1]['cards']

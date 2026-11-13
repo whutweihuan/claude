@@ -513,7 +513,7 @@ class HookTests(unittest.TestCase):
         self.assertEqual(len(r['relic_choices']), 3)
         for rid in r['relic_choices']:
             self.assertIn(content.RELICS[rid].rarity, ('uncommon', 'rare'))
-        self.assertTrue(30 <= r['gold'] <= 45)
+        self.assertTrue(33 <= r['gold'] <= 50)
         self.assertEqual(r['card_choices'], [])
 
     def test_settle_normal_gold_range(self):
@@ -523,10 +523,10 @@ class HookTests(unittest.TestCase):
         drops = 0
         for s in range(200):
             r = core.settle_combat(hero, random.Random(s), layer=1)
-            self.assertTrue(16 <= r['gold'] <= 22)
+            self.assertTrue(17 <= r['gold'] <= 24)
             if r['relic_drop']:
                 drops += 1
-        self.assertTrue(10 <= drops <= 40, drops)
+        self.assertTrue(20 <= drops <= 65, drops)
 
     def test_relic_crown_boss_only(self):
         self.assertEqual(content.RELICS['crown'].rarity, 'boss')
