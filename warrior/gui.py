@@ -713,5 +713,46 @@ class WarriorGUI(object):
         self.game.close_shop()
         self.show_map()
 
+    # ---------- 结算屏 ----------
+
     def show_end(self):
-        self._placeholder('结算屏（待实装）')
+        g = self.game
+        if not self._finished_notified:
+            self._finished_notified = True
+            result = dict(g.stats)
+            result['outcome'] = g.outcome
+            self._last_finish_status = None
+            if self.on_finish is not None:
+                self._last_finish_status = self.on_finish(result)
+        self._clear()
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=12, pady=8)
+        if g.outcome == 'win':
+            ttk.Label(outer, text='*** 魔王倒下了。山道尽头透出晨光。***',
+                      font=('TkDefaultFont', 14),
+                      wraplength=900).pack(pady=8)
+        else:
+            ttk.Label(outer, text='你倒在了第 %d 层。传说还没有讲完。'
+                      % g.depth_reached, wraplength=900).pack(pady=8)
+        ttk.Label(outer,
+                  text='深度 %d · 击杀 %d · 累计金币 %d · 种子 %s'
+                       % (g.stats.get('depth', 0), g.stats.get('kills', 0),
+                          g.stats.get('gold_earned', 0),
+                          g.stats.get('seed'))).pack(pady=4)
+        self.end_msg_var = tk.StringVar()
+        if getattr(self, '_last_finish_status', None) == 'io_error':
+            self.end_msg_var.set('战绩写入失败（原文件未被破坏）。')
+        ttk.Label(outer, textvariable=self.end_msg_var,
+                  wraplength=900).pack(pady=2)
+        row = ttk.Frame(outer)
+        row.pack(pady=10)
+        self.replay_btn = ttk.Button(row, text='再来一局（新地图）',
+                                     command=self._replay)
+        self.leave_app_btn = ttk.Button(row, text='离开山道',
+                                        command=self.root.destroy)
+        self.replay_btn.pack(side='left', padx=6)
+        self.leave_app_btn.pack(side='left', padx=6)
+
+    def _replay(self):
+        seed = int(time.time_ns() % 1000000)
+        self.start_run(seed)

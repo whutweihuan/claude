@@ -375,5 +375,57 @@ class ShopScreenTests(GuiTestCase):
         self.assertTrue(app.game.node_done)
 
 
+class EndScreenTests(GuiTestCase):
+
+    def win_boss(self, app):
+        g = app.game
+        force_node(g, find_node(g, 'boss'))
+        for e in g.active.enemies:
+            e.hp = 0
+        g.active.status = 'win'
+        g.combat_finished()
+        app.show_screen()
+
+    def test_on_finish_called_once_per_run(self):
+        calls = []
+
+        def on_finish(result):
+            calls.append(result)
+            return 'ok'
+
+        app = make_app(self.root, seed=7, on_finish=on_finish)
+        self.win_boss(app)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['outcome'], 'win')
+        self.assertEqual(calls[0]['depth'], 11)
+        app.show_end()
+        self.assertEqual(len(calls), 1)
+
+    def test_replay_uses_new_seed(self):
+        app = make_app(self.root, seed=7, on_finish=lambda r: 'ok')
+        self.win_boss(app)
+        old = app.game.seed
+        app.replay_btn.invoke()
+        self.assertNotEqual(app.game.seed, old)
+        self.assertFalse(app.game.finished)
+
+    def test_leave_button_destroys_root(self):
+        app = make_app(self.root, seed=7, on_finish=lambda r: 'ok')
+        self.win_boss(app)
+        app.leave_app_btn.invoke()
+        self.assertRaises(tk.TclError, app.root.winfo_exists)
+
+    def test_on_finish_io_error_hint(self):
+        app = make_app(self.root, seed=7, on_finish=lambda r: 'io_error')
+        self.win_boss(app)
+        self.assertIn('写入失败', app.end_msg_var.get())
+
+    def test_close_midrun_no_record(self):
+        calls = []
+        app = make_app(self.root, seed=7, on_finish=calls.append)
+        app._on_close()
+        self.assertEqual(calls, [])
+
+
 if __name__ == '__main__':
     unittest.main()
