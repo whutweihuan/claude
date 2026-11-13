@@ -460,7 +460,7 @@ class UI(object):
                 if slot.sold:
                     self.w(' %d. ——已售罄——' % (i + 1))
                     continue
-                name = _item_name(slot.kind, slot.content_id)
+                name = item_name(slot.kind, slot.content_id)
                 self.w(' %d.【%s】%d 金币' % (i + 1, name, slot.price))
             self.w(' r. 删一张牌（%d 金币）  d. 离开' % shop.remove_cost)
             raw = self.r()
@@ -492,7 +492,7 @@ core_buy = _core.buy
 core_buy_removal = _core.buy_removal
 
 
-def _item_name(kind, cid):
+def item_name(kind, cid):
     if kind == 'card':
         return content.CARDS[cid].name
     if kind == 'weapon':

@@ -315,5 +315,65 @@ class NodeScreensTests(GuiTestCase):
         self.assertTrue(g.node_done)
 
 
+class ShopScreenTests(GuiTestCase):
+
+    def app_at_shop(self, seed=80, relics=()):
+        app = make_app(self.root, seed)
+        app.game.hero.relics = list(relics)
+        node = find_node(app.game, 'shop')
+        force_node(app.game, node)
+        app.show_screen()
+        return app
+
+    def test_shop_slots_and_buy(self):
+        app = self.app_at_shop()
+        shop = app.game.shop
+        self.assertEqual(len(app.shop_slot_buttons), 7)
+        wi = [i for i, s in enumerate(shop.slots) if s.kind == 'weapon'][0]
+        wid = shop.slots[wi].content_id
+        app.game.hero.gold = 999
+        app.show_shop()
+        price = shop.slots[wi].price
+        app.shop_slot_buttons[wi].invoke()
+        self.assertEqual(app.game.hero.weapon, wid)
+        self.assertEqual(app.game.hero.gold, 999 - price)
+        self.assertTrue(shop.slots[wi].sold)
+        app.show_shop()
+        self.assertTrue(app.shop_slot_buttons[wi].instate(('disabled',)))
+
+    def test_shop_unaffordable_disabled(self):
+        app = self.app_at_shop(seed=81)
+        app.game.hero.gold = 0
+        app.show_shop()
+        for btn in app.shop_slot_buttons:
+            self.assertTrue(btn.instate(('disabled',)))
+        self.assertTrue(app.remove_btn.instate(('disabled',)))
+
+    def test_discount_shows_base_price(self):
+        app = self.app_at_shop(seed=82, relics=['hag_hat'])
+        texts = [b.cget('text') for b in app.shop_slot_buttons]
+        with_disc = [t for t in texts if '原价' in t]
+        self.assertTrue(with_disc)
+        for t in with_disc:
+            self.assertIn('→', t)
+
+    def test_remove_card_service(self):
+        app = self.app_at_shop(seed=83)
+        app.game.hero.gold = 999
+        app.show_shop()
+        cost = app.game.shop.remove_cost
+        n0 = len(app.game.hero.deck)
+        app.remove_btn.invoke()
+        slot0_btn = app.deck_card_buttons[0]
+        slot0_btn.invoke()
+        self.assertEqual(len(app.game.hero.deck), n0 - 1)
+        self.assertEqual(app.game.hero.gold, 999 - cost)
+
+    def test_close_shop(self):
+        app = self.app_at_shop(seed=84)
+        app.shop_close_btn.invoke()
+        self.assertTrue(app.game.node_done)
+
+
 if __name__ == '__main__':
     unittest.main()

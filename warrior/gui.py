@@ -8,7 +8,7 @@ from tkinter.scrolledtext import ScrolledText
 
 import core
 import content
-from ui import KIND_ICON, KIND_NAME
+from ui import KIND_ICON, KIND_NAME, item_name
 
 WRAP_PX = 170
 SINGLE_TARGET_OPS = ('damage', 'pierce', 'execute', 'vulnerable', 'poison',
@@ -637,8 +637,81 @@ class WarriorGUI(object):
             g.skip_card()
         self.show_map()
 
+    # ---------- 商店屏 ----------
+
     def show_shop(self):
-        self._placeholder('商店屏（任务 5 实装）')
+        g = self.game
+        shop = g.shop
+        self._clear()
+        self._update_status()
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=12, pady=8)
+        ttk.Label(outer, text='“随便看，不还价。”',
+                  wraplength=900).pack(anchor='w')
+        row = ttk.Frame(outer)
+        row.pack(pady=6)
+        self.shop_slot_buttons = []
+        for i, slot in enumerate(shop.slots):
+            name = item_name(slot.kind, slot.content_id)
+            if slot.sold:
+                text = '%s\n已售罄' % name
+            elif slot.price != slot.base_price:
+                text = '%s\n原价%d → %d金币' % (name, slot.base_price,
+                                              slot.price)
+            else:
+                text = '%s\n%d金币' % (name, slot.price)
+            btn = ttk.Button(row, text=text,
+                             command=lambda idx=i: self._shop_buy(idx))
+            btn.grid(row=i // 4, column=i % 4, padx=3, pady=3,
+                     sticky='nsew')
+            if slot.sold or g.hero.gold < slot.price:
+                btn.state(['disabled'])
+            self.shop_slot_buttons.append(btn)
+        self.remove_btn = ttk.Button(
+            outer, text='删一张牌（%d 金币）' % shop.remove_cost,
+            command=self._shop_remove_open)
+        self.remove_btn.pack(anchor='w', pady=4)
+        if g.hero.gold < shop.remove_cost:
+            self.remove_btn.state(['disabled'])
+        self.deck_card_buttons = {}
+        if getattr(self, '_shop_remove_mode', False):
+            grid = ttk.Frame(outer)
+            grid.pack(pady=2)
+            widgets = []
+            for j, (cid, up) in enumerate(g.hero.deck):
+                btn = ttk.Button(
+                    grid, text='%s%s' % (content.CARDS[cid].name,
+                                         '+' if up else ''),
+                    command=lambda slot=j: self._shop_remove_pick(slot))
+                self.deck_card_buttons[j] = btn
+                widgets.append(btn)
+            _flow_layout(grid, widgets, self.WINDOW_W - 80)
+        msg = getattr(self, '_shop_msg', None)
+        if msg:
+            ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w')
+            self._shop_msg = None
+        self.shop_close_btn = ttk.Button(outer, text='离开商店',
+                                          command=self._shop_close)
+        self.shop_close_btn.pack(anchor='w', pady=6)
+
+    def _shop_buy(self, i):
+        lines = core.buy(self.game, i)
+        self._shop_msg = ' '.join(lines)
+        self.show_shop()
+
+    def _shop_remove_open(self):
+        self._shop_remove_mode = True
+        self.show_shop()
+
+    def _shop_remove_pick(self, slot):
+        lines = core.buy_removal(self.game, slot)
+        self._shop_remove_mode = False
+        self._shop_msg = ' '.join(lines)
+        self.show_shop()
+
+    def _shop_close(self):
+        self.game.close_shop()
+        self.show_map()
 
     def show_end(self):
         self._placeholder('结算屏（待实装）')
