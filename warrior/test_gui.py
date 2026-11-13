@@ -42,6 +42,7 @@ import gui  # noqa: E402
 
 def make_app(root, seed=None, on_finish=None):
     app = gui.WarriorGUI(root, on_finish=on_finish)
+    app._action_debounce = 0.0  # 测试默认关防抖；防抖行为单独测
     if seed is not None:
         app.start_run(seed)
     return app
@@ -354,10 +355,10 @@ class ShopScreenTests(GuiTestCase):
     def test_discount_shows_base_price(self):
         app = self.app_at_shop(seed=82, relics=['hag_hat'])
         texts = [b.cget('text') for b in app.shop_slot_buttons]
-        with_disc = [t for t in texts if '原价' in t]
+        with_disc = [t for t in texts if '原' in t]
         self.assertTrue(with_disc)
         for t in with_disc:
-            self.assertIn('→', t)
+            self.assertIn('金币', t)
 
     def test_remove_card_service(self):
         app = self.app_at_shop(seed=83)
@@ -434,6 +435,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 import tkinter as tk
 import tkinter.font as tkfont
+from tkinter import ttk
 
 import core
 import content
@@ -455,10 +457,37 @@ def walk(w):
             yield g
 
 
+_STYLE = ttk.Style()
+
+
+def _wfont(w):
+    try:
+        f = w.cget('font')
+        if f:
+            return tkfont.Font(font=f)
+    except (tk.TclError, KeyError, ValueError):
+        pass
+    cls = w.winfo_class()
+    if cls == 'TButton':
+        name = _STYLE.lookup('TButton', 'font')
+        if name:
+            try:
+                return tkfont.Font(font=name)
+            except (tk.TclError, ValueError):
+                pass
+    if cls == 'TLabel':
+        name = _STYLE.lookup('TLabel', 'font')
+        if name:
+            try:
+                return tkfont.Font(font=name)
+            except (tk.TclError, ValueError):
+                pass
+    return tkfont.nametofont('TkDefaultFont')
+
+
 def check(tag):
     root.update_idletasks()
     root.update()
-    dflt = tkfont.nametofont('TkDefaultFont')
     for w in walk(root):
         if not w.winfo_ismapped():
             continue
@@ -467,14 +496,26 @@ def check(tag):
             text = str(w.cget('text'))
             if not text:
                 continue
-            for line in text.split('\n'):
-                need = dflt.measure(line)
-                if need > w.winfo_width() + 2:
-                    problems.append('%s: %r needs %d > %d'
-                                    % (tag, line, need, w.winfo_width()))
-            if (w.winfo_x() + w.winfo_width()
-                    > w.master.winfo_width() + 2):
-                problems.append('%s: %r overflows row' % (tag, text[:12]))
+            wl = 0
+            try:
+                wl = int(w.cget('wraplength'))
+            except (ValueError, tk.TclError):
+                wl = 0
+            if wl == 0:
+                for line in text.split('\n'):
+                    need = _wfont(w).measure(line)
+                    if need > w.winfo_width() + 2:
+                        problems.append('%s: %r needs %d > %d'
+                                        % (tag, line[:16], need,
+                                           w.winfo_width()))
+            if cls in ('Button', 'TButton'):
+                if (w.winfo_x() + w.winfo_width()
+                        > w.master.winfo_width() + 2):
+                    problems.append('%s: %r overflows row'
+                                    % (tag, text[:12]))
+                if w.winfo_height() < 8:
+                    problems.append('%s: %r collapsed to h=%d'
+                                    % (tag, text[:12], w.winfo_height()))
         if isinstance(w, tk.Canvas):
             cw = w.winfo_width()
             chh = w.winfo_height()
@@ -484,22 +525,35 @@ def check(tag):
                     continue
                 if (bbox[0] < -1 or bbox[1] < -1
                         or bbox[2] > cw + 1 or bbox[3] > chh + 1):
-                    problems.append('%s: canvas item %s bbox %s > %dx%d'
-                                    % (tag, w.type(item), bbox, cw, chh))
-    if root.winfo_reqwidth() > 1000 + 4:
-        problems.append('%s: window reqwidth %d > 1000'
+                    problems.append('%s: canvas bbox out' % tag)
+    if root.winfo_reqwidth() > 1120:
+        problems.append('%s: window reqwidth %d > 1120'
                         % (tag, root.winfo_reqwidth()))
+    if root.winfo_reqheight() > 1080:
+        problems.append('%s: window reqheight %d > 1080'
+                        % (tag, root.winfo_reqheight()))
+    log = getattr(app, 'log_text', None)
+    try:
+        if log is not None and log.winfo_exists() \
+                and log.winfo_ismapped() and log.winfo_height() < 8:
+            problems.append('%s: log collapsed' % tag)
+    except tk.TclError:
+        pass
 
 
-# 1) 战斗屏：12 张手牌 + 3 敌人 + 长日志
-combat = test_run.force_node(game, test_run.find_node(game, 'combat'))
-game.active.enemies = [core.EnemyInstance(content.ENEMIES[e], 1)
-                       for e in ('goblin', 'wolf', 'slime')]
+# 1) 战斗屏：12 张手牌 + 3 带状态敌人 + 长日志
+test_run.force_node(game, test_run.find_node(game, 'combat'))
+game.active.enemies = [
+    core.EnemyInstance(content.ENEMIES[e], 1)
+    for e in ('goblin', 'wolf', 'slime')]
 for e in game.active.enemies:
     e.intent = '攻击 5×2'
+    e.block = 5
+    e.vulnerable = 1
+    e.poison = 2
 game.active.hand = ([('strike', False)] * 4 + [('defend', True)] * 4
                     + [('heavy', False)] * 2 + [('cleave', True)] * 2)
-app._log(['这是一条足够长的战斗日志用来验证换行与宽度限制是否有效。'] * 3)
+app._combat_log = ['这是一条足够长的战斗日志用来验证换行与宽度限制是否有效。'] * 3
 app.show_combat()
 check('combat')
 
@@ -511,20 +565,49 @@ test_run.force_node(game, test_run.find_node(game, 'campfire'))
 app._camp_forge_mode = True
 app.show_campfire()
 check('campfire')
+app._camp_forge_mode = False
 
 # 3) 商店屏 + 删牌展开
 game.node_done = True
-game._camp_forge_mode = False
 test_run.force_node(game, test_run.find_node(game, 'shop'))
 game.hero.gold = 999
-app.show_shop()
-game.shop.slots[0].content_id  # 渲染过即可
 app._shop_remove_mode = True
 app.show_shop()
 check('shop')
+app._shop_remove_mode = False
 
-# 4) 地图屏全量按钮
-game._shop_remove_mode = False
+# 4) 奖励屏：卡牌三选一（最长文本）与遗物三选一
+game.node_done = True
+game.pending = {
+    'gold': 40,
+    'relic_choices': [],
+    'relic_drop': None,
+    'card_choices': [('annihilate', False), ('execute', False),
+                     ('blood_price', False)],
+    'lines': ['获得 40 金币。']}
+app.show_rewards()
+check('rewards')
+game.pending = {
+    'gold': 0,
+    'relic_choices': ['idol', 'hourglass', 'warpaint'],
+    'relic_drop': None,
+    'card_choices': [],
+    'lines': []}
+app.show_rewards()
+check('rewards-relic')
+game.pending = None
+
+# 5) 事件屏（渲染测试：直接把 current 指向事件节点，不走真实移动）
+evnode = test_run.find_node(game, 'event')
+game.current = evnode.id
+game.node_done = False
+game.active = None
+game.pending = None
+game.node_obj = content.EVENTS['goblin_gambler']
+app.show_event()
+check('event')
+
+# 6) 地图屏
 game.node_done = True
 app.show_map()
 check('map')
@@ -553,3 +636,91 @@ class LayoutRegressionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FinalFixTests(GuiTestCase):
+    """终审修复轮回归（Critical 1 / Important 2/7 / Minor 升级项 8/9）。"""
+
+    def make(self, seed=7, debounce=None):
+        app = make_app(self.root, seed)
+        if debounce is not None:
+            app._action_debounce = debounce
+        return app
+
+    def finish_combat(self, app):
+        g = app.game
+        for e in g.active.enemies:
+            e.hp = 0
+        g.active.status = 'win'
+        g.combat_finished()
+        while g.pending is not None:
+            if g.pending['relic_choices']:
+                g.skip_relic()
+            else:
+                g.skip_card()
+        app.show_screen()
+
+    def test_second_combat_renders(self):
+        # Critical 1：同一 app 连续两场战斗，第二场必须可玩
+        app = self.make()
+        to_combat(app, enemies=['goblin'])
+        self.finish_combat(app)
+        nxt = app.game.choices()[0]
+        app.game.go(nxt)
+        while app.game.map.nodes[nxt].kind not in ('combat', 'elite', 'boss'):
+            app.game.enter()
+            app.game.node_done = True
+            app.game.go(app.game.choices()[0])
+            nxt = app.game.current
+        app.game.enter()
+        app.show_screen()
+        self.assertTrue(app.game.active is not None)
+        self.assertGreater(len(app.hand_buttons), 0)
+
+    def test_replay_first_combat_renders(self):
+        # Critical 1 变体：start_run 重置后新局首场战斗（模拟重开路径）
+        app = self.make()
+        to_combat(app, enemies=['goblin'])
+        self.finish_combat(app)
+        app.start_run(99)
+        to_combat(app, enemies=['wolf'])
+        self.assertGreater(len(app.hand_buttons), 0)
+
+    def test_end_turn_clears_targeting(self):
+        app = self.make()
+        combat = to_combat(app, enemies=['goblin', 'wolf'],
+                           hand=['strike', 'defend', 'defend'])
+        app.hand_buttons[0].invoke()
+        self.assertEqual(app._pending_card, 0)
+        app.end_btn.invoke()
+        self.assertIsNone(app._pending_card)
+        hp0 = combat.enemies[0].hp
+        app._on_enemy(0)  # 不应误打新回合的牌
+        self.assertEqual(combat.enemies[0].hp, hp0)
+
+    def test_card_play_clears_potion_pending(self):
+        app = self.make()
+        combat = to_combat(app, enemies=['goblin', 'wolf'],
+                           hand=['defend', 'defend'])
+        app.game.hero.potions = ['p_acid']
+        app.show_combat()
+        app.potion_buttons[0].invoke()
+        self.assertEqual(app._pending_potion, 0)
+        app.hand_buttons[0].invoke()  # defend 直接打出
+        self.assertIsNone(app._pending_potion)
+
+    def test_double_click_debounced(self):
+        app = self.make(debounce=0.2)
+        combat = to_combat(app, enemies=['goblin'])
+        turn0 = combat.turn
+        app.end_btn.invoke()
+        app.end_btn.invoke()
+        self.assertEqual(combat.turn, turn0 + 1)
+
+    def test_start_run_resets_screen_modes(self):
+        app = self.make()
+        app._camp_forge_mode = True
+        app._shop_remove_mode = True
+        app.start_run(121)
+        self.assertFalse(app._camp_forge_mode)
+        self.assertFalse(app._shop_remove_mode)

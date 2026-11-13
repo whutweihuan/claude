@@ -3,6 +3,7 @@
 import textwrap
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
@@ -26,27 +27,16 @@ def _enable_dpi_awareness():
         pass
 
 
-def _flow_layout(container, widgets, max_width):
-    """自然宽度流式排布：按行装入 grid，返回行列表。"""
-    for w in widgets:
-        w.update_idletasks()
-    rows = []
-    row = []
-    used = 0
-    for w in widgets:
-        need = w.winfo_reqwidth() + 4
-        if row and used + need > max_width:
-            rows.append(row)
-            row = []
-            used = 0
-        row.append(w)
-        used += need
-    if row:
-        rows.append(row)
+def _flow_layout(container, widgets, per_row):
+    """按每行固定列数装入 grid。列数由调用方按 DPI 放大后的最坏行宽定，
+    不依赖字体度量时机（实测早期 measure 偏小会压扁控件）。"""
+    rows = [widgets[i:i + per_row] for i in range(0, len(widgets), per_row)]
+    cols = max((len(g) for g in rows), default=0)
     for r, group in enumerate(rows):
         for c, w in enumerate(group):
             w.grid(row=r, column=c, padx=2, pady=2, sticky='nsew')
-        container.grid_columnconfigure(c, weight=1)
+    for c in range(cols):
+        container.grid_columnconfigure(c, weight=1, uniform='flow')
     return rows
 
 
@@ -61,6 +51,8 @@ class WarriorGUI(object):
         self._finished_notified = False
         self._pending_card = None
         self._pending_potion = None
+        self._action_debounce = 0.18
+        self._last_act = {}
         root.title('勇士冒险')
         root.geometry('%dx%d' % (self.WINDOW_W, self.WINDOW_H))
         root.minsize(900, 620)
@@ -82,9 +74,26 @@ class WarriorGUI(object):
     def _on_close(self):
         self.root.destroy()
 
+    def _debounced(self, key):
+        """重建式换屏对双击不安全：同坐标第二击会落在新屏的合法控件上。
+        同一动作(处理函数+参数)在窗口期内只允许一次。"""
+        now = time.monotonic()
+        gap = getattr(self, '_action_debounce', 0.0)
+        if gap > 0 and now - self._last_act.get(key, -9.0) < gap:
+            return True
+        self._last_act[key] = now
+        return False
+
     def _clear(self):
         for child in self.container.winfo_children():
             child.destroy()
+
+    def _fit(self):
+        """基线 1000x660；内容更大时窗口长大而不是压缩控件（DPI 纪律）。"""
+        self.root.update_idletasks()
+        w = max(self.WINDOW_W, self.root.winfo_reqwidth())
+        h = max(self.WINDOW_H, self.root.winfo_reqheight())
+        self.root.geometry('%dx%d' % (w, h))
 
     def _update_status(self):
         if self.game is None:
@@ -141,8 +150,11 @@ class WarriorGUI(object):
         self.start_btn = ttk.Button(frame, text='开始冒险',
                                     command=self._on_start)
         self.start_btn.pack(pady=10)
+        self._fit()
 
     def _on_start(self):
+        if self._debounced(('start', 0)):
+            return
         import main as main_mod
         raw = self.seed_entry.get().strip()
         seed = main_mod.parse_seed(raw)
@@ -156,6 +168,10 @@ class WarriorGUI(object):
         self._pending_card = None
         self._pending_potion = None
         self._combat_log = []
+        self._logged_combat = None
+        self._camp_forge_mode = False
+        self._shop_remove_mode = False
+        self._last_act = {}
         self.show_map()
 
     # ---------- 地图屏 ----------
@@ -194,9 +210,12 @@ class WarriorGUI(object):
                   text='点击亮色节点前进。图例：战=战斗 精=精英 火=火堆 '
                        '事=事件 店=商店 宝=宝箱 魔=魔王').grid(
             row=len(layers), column=0, sticky='w', pady=6)
+        self._fit()
 
     def _on_move(self, nid):
         g = self.game
+        if self._debounced(('move', nid)):
+            return
         if nid not in g.choices():
             return
         g.go(nid)
@@ -224,9 +243,8 @@ class WarriorGUI(object):
             self._logged_combat = combat
             self._pending_card = None
             self._pending_potion = None
-            self._combat_log = []
-            self._log(['--- 遭遇 %s！---' % '、'.join(
-                e.name for e in combat.enemies)])
+            self._combat_log = ['--- 遭遇 %s！---' % '、'.join(
+                e.name for e in combat.enemies)]
         targeting = (self._pending_card is not None
                      or self._pending_potion is not None)
         snap = combat.snapshot()
@@ -234,8 +252,9 @@ class WarriorGUI(object):
                   % (snap['hp'], snap['max_hp'], snap['block'],
                      snap['energy'], snap['turn'])).pack(anchor='w')
         ef = ttk.Frame(outer)
-        ef.pack(fill='x', pady=4)
+        ef.pack(fill='x', pady=2)
         self.enemy_buttons = []
+        enemy_frames = []
         for i, e in enumerate(snap['enemies']):
             if not e['alive']:
                 continue
@@ -247,34 +266,38 @@ class WarriorGUI(object):
             if e['poison']:
                 extras.append('毒%d' % e['poison'])
             f = ttk.Frame(ef)
-            f.pack(side='left', padx=4)
+            enemy_frames.append(f)
             prefix = '◉ ' if targeting else ''
+            lines = [prefix + e['name'], '%d/%d' % (e['hp'],
+                                                    e['max_hp'])]
+            intent_line = '意图 %s' % (e['intent'] or '…')
+            lines.extend(textwrap.wrap(intent_line, 8))
+            if extras:
+                lines.extend(textwrap.wrap(' '.join(extras), 7))
             btn = ttk.Button(
-                f, text='%s%s\n%d/%d 意图:%s%s'
-                       % (prefix, e['name'], e['hp'], e['max_hp'],
-                          e['intent'] or '…',
-                          (' ' + '/'.join(extras)) if extras else ''),
+                f, text='\n'.join(lines),
                 command=lambda idx=i: self._on_enemy(idx))
             btn.pack()
             bar = tk.Canvas(f, width=110, height=10, highlightthickness=0)
             bar.pack(pady=(2, 0))
             self._draw_hp_bar(bar, e['hp'], e['max_hp'])
             self.enemy_buttons.append(btn)
+        _flow_layout(ef, enemy_frames, 2)
         hf = ttk.Frame(outer)
         hf.pack(fill='x', pady=6)
         self.hand_buttons = []
         for card in snap['hand']:
             star = '+' if card['upgraded'] else ''
-            body = '\n'.join(textwrap.wrap(card['text'], 12))
+            body = '\n'.join(
+                textwrap.wrap('%d费 %s' % (card['cost'], card['text']), 7))
             btn = ttk.Button(
                 hf,
-                text='%s%s（%d费）\n%s' % (card['name'], star, card['cost'],
-                                          body),
+                text='%s%s\n%s' % (card['name'], star, body),
                 command=lambda idx=card['idx']: self._on_card(idx))
             if not card['playable']:
                 btn.state(['disabled'])
             self.hand_buttons.append(btn)
-        _flow_layout(hf, self.hand_buttons, self.WINDOW_W - 140)
+        _flow_layout(hf, self.hand_buttons, 3)
         af = ttk.Frame(outer)
         af.pack(fill='x', pady=2)
         self.end_btn = ttk.Button(af, text='结束回合',
@@ -292,10 +315,11 @@ class WarriorGUI(object):
                                      command=self._cancel_targeting)
         if targeting:
             self.cancel_btn.pack(side='left', padx=4)
-        self.log_text = ScrolledText(outer, height=7, width=58,
+        self.log_text = ScrolledText(outer, height=4, width=58,
                                       wrap='word')
         self.log_text.pack(fill='x', pady=4)
         self._render_log()
+        self._fit()
 
     def _draw_hp_bar(self, canvas, hp, max_hp):
         canvas.delete('all')
@@ -309,6 +333,8 @@ class WarriorGUI(object):
     # ---------- 战斗日志 ----------
 
     def _render_log(self):
+        if not hasattr(self, 'log_text') or not self.log_text.winfo_exists():
+            return
         self.log_text.configure(state='normal')
         self.log_text.delete('1.0', 'end')
         for line in self._combat_log[-120:]:
@@ -335,6 +361,8 @@ class WarriorGUI(object):
         combat = self.game.active
         if combat is None or combat.status != 'playing':
             return
+        if self._debounced(('card', idx)):
+            return
         snap = combat.snapshot()
         if not (0 <= idx < len(snap['hand'])) \
                 or not snap['hand'][idx]['playable']:
@@ -350,12 +378,15 @@ class WarriorGUI(object):
             self.show_combat()
             return
         self._pending_card = None
+        self._pending_potion = None
         lines = combat.play_card(idx, None)
         self._after_action(lines)
 
     def _on_enemy(self, idx):
         combat = self.game.active
         if combat is None or combat.status != 'playing':
+            return
+        if self._debounced(('enemy', idx)):
             return
         if self._pending_card is not None:
             card_idx = self._pending_card
@@ -372,6 +403,8 @@ class WarriorGUI(object):
         combat = self.game.active
         if combat is None or combat.status != 'playing':
             return
+        if self._debounced(('potion', slot)):
+            return
         if not (0 <= slot < len(combat.hero.potions)):
             return
         pid = combat.hero.potions[slot]
@@ -382,6 +415,7 @@ class WarriorGUI(object):
             self.show_combat()
             return
         self._pending_potion = None
+        self._pending_card = None
         lines = combat.use_potion(slot, None)
         self._after_action(lines)
 
@@ -389,6 +423,10 @@ class WarriorGUI(object):
         combat = self.game.active
         if combat is None or combat.status != 'playing':
             return
+        if self._debounced(('end_turn', 0)):
+            return
+        self._pending_card = None
+        self._pending_potion = None
         lines = combat.end_turn()
         self._after_action(lines)
 
@@ -473,16 +511,17 @@ class WarriorGUI(object):
                 cid, up = g.hero.deck[slot]
                 card = content.CARDS[cid]
                 btn = ttk.Button(
-                    grid, text='%s\n%s' % (card.name, card.text),
+                    grid, text='%s%s' % (card.name, '+' if up else ''),
                     command=lambda s=slot: self._camp_forge_pick(s))
                 self.forge_card_buttons[slot] = btn
                 widgets.append(btn)
-            _flow_layout(grid, widgets, self.WINDOW_W - 140)
+            _flow_layout(grid, widgets, 6)
         msg = getattr(self, '_camp_msg', None)
         if msg:
             ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w',
                                                              pady=4)
             self._camp_msg = None
+        self._fit()
 
     def _camp_after(self, lines):
         if self.game.node_done:
@@ -492,19 +531,29 @@ class WarriorGUI(object):
             self.show_campfire()
 
     def _camp_sleep(self):
+        if self._debounced(('camp', 'sleep')):
+            return
         self._camp_after(self.game.campfire('sleep'))
 
     def _camp_sharpen(self):
+        if self._debounced(('camp', 'sharpen')):
+            return
         self._camp_after(self.game.campfire('sharpen'))
 
     def _camp_leave(self):
+        if self._debounced(('camp', 'leave')):
+            return
         self._camp_after(self.game.campfire('leave'))
 
     def _camp_forge(self):
+        if self._debounced(('camp', 'forge')):
+            return
         self._camp_forge_mode = True
         self.show_campfire()
 
     def _camp_forge_pick(self, slot):
+        if self._debounced(('camp_forge_pick', slot)):
+            return
         self._camp_forge_mode = False
         self._camp_after(self.game.campfire('forge', slot))
 
@@ -535,8 +584,11 @@ class WarriorGUI(object):
         if msg:
             ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w')
             self._event_msg = None
+        self._fit()
 
     def _event_pick(self, idx):
+        if self._debounced(('event', idx)):
+            return
         g = self.game
         lines, follow = core.apply_event(g, g.node_obj, idx)
         if follow is not None:
@@ -572,8 +624,11 @@ class WarriorGUI(object):
             command=lambda: self._chest_take(False))
         self.equip_btn.pack(side='left', padx=4)
         self.gold_only_btn.pack(side='left', padx=4)
+        self._fit()
 
     def _chest_take(self, equip):
+        if self._debounced(('chest', bool(equip))):
+            return
         self.game.take_chest(equip)
         self.show_map()
 
@@ -593,15 +648,17 @@ class WarriorGUI(object):
         self.card_choice_buttons = []
         row = ttk.Frame(outer)
         row.pack(pady=6)
+        reward_widgets = []
         if p['relic_choices']:
             ttk.Label(outer, text='战利品·遗物').pack(anchor='w')
             for i, rid in enumerate(p['relic_choices']):
                 relic = content.RELICS[rid]
+                body = '\n'.join(textwrap.wrap(relic.text, 8))
                 btn = ttk.Button(row,
-                                 text='%s\n%s' % (relic.name, relic.text),
+                                 text='%s\n%s' % (relic.name, body),
                                  command=lambda idx=i: self._reward_relic(idx))
-                btn.pack(side='left', padx=4)
                 self.relic_choice_buttons.append(btn)
+                reward_widgets.append(btn)
             self.skip_btn = ttk.Button(outer, text='不拿了',
                                        command=self._reward_skip)
         else:
@@ -611,26 +668,35 @@ class WarriorGUI(object):
             for i, (cid, up) in enumerate(p['card_choices']):
                 card = content.CARDS[cid]
                 text = card.upgrade['text'] if up else card.text
+                body = '\n'.join(textwrap.wrap(text, 8))
                 btn = ttk.Button(
-                    row, text='%s%s\n%d费 %s' % (card.name,
+                    row, text='%s%s\n%d费\n%s' % (card.name,
                                                  '+' if up else '',
-                                                 card.cost, text),
+                                                 card.cost, body),
                     command=lambda idx=i: self._reward_card(idx))
-                btn.pack(side='left', padx=4)
                 self.card_choice_buttons.append(btn)
+                reward_widgets.append(btn)
             self.skip_btn = ttk.Button(outer, text='跳过',
                                        command=self._reward_skip)
+        _flow_layout(row, reward_widgets, 2)
         self.skip_btn.pack(anchor='w', pady=6)
+        self._fit()
 
     def _reward_relic(self, i):
+        if self._debounced(('reward_relic', i)):
+            return
         self.game.choose_relic(i)
         self.show_map()
 
     def _reward_card(self, i):
+        if self._debounced(('reward_card', i)):
+            return
         self.game.take_card(i)
         self.show_map()
 
     def _reward_skip(self):
+        if self._debounced(('reward_skip', 0)):
+            return
         g = self.game
         if g.pending['relic_choices']:
             g.skip_relic()
@@ -657,17 +723,16 @@ class WarriorGUI(object):
             if slot.sold:
                 text = '%s\n已售罄' % name
             elif slot.price != slot.base_price:
-                text = '%s\n原价%d → %d金币' % (name, slot.base_price,
-                                              slot.price)
+                text = '%s\n%d金币\n原%d' % (name, slot.price,
+                                          slot.base_price)
             else:
                 text = '%s\n%d金币' % (name, slot.price)
             btn = ttk.Button(row, text=text,
                              command=lambda idx=i: self._shop_buy(idx))
-            btn.grid(row=i // 4, column=i % 4, padx=3, pady=3,
-                     sticky='nsew')
             if slot.sold or g.hero.gold < slot.price:
                 btn.state(['disabled'])
             self.shop_slot_buttons.append(btn)
+        _flow_layout(row, self.shop_slot_buttons, 3)
         self.remove_btn = ttk.Button(
             outer, text='删一张牌（%d 金币）' % shop.remove_cost,
             command=self._shop_remove_open)
@@ -686,7 +751,7 @@ class WarriorGUI(object):
                     command=lambda slot=j: self._shop_remove_pick(slot))
                 self.deck_card_buttons[j] = btn
                 widgets.append(btn)
-            _flow_layout(grid, widgets, self.WINDOW_W - 140)
+            _flow_layout(grid, widgets, 6)
         msg = getattr(self, '_shop_msg', None)
         if msg:
             ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w')
@@ -694,8 +759,11 @@ class WarriorGUI(object):
         self.shop_close_btn = ttk.Button(outer, text='离开商店',
                                           command=self._shop_close)
         self.shop_close_btn.pack(anchor='w', pady=6)
+        self._fit()
 
     def _shop_buy(self, i):
+        if self._debounced(('shop_buy', i)):
+            return
         lines = core.buy(self.game, i)
         self._shop_msg = ' '.join(lines)
         self.show_shop()
@@ -705,12 +773,16 @@ class WarriorGUI(object):
         self.show_shop()
 
     def _shop_remove_pick(self, slot):
+        if self._debounced(('shop_remove', slot)):
+            return
         lines = core.buy_removal(self.game, slot)
         self._shop_remove_mode = False
         self._shop_msg = ' '.join(lines)
         self.show_shop()
 
     def _shop_close(self):
+        if self._debounced(('shop_close', 0)):
+            return
         self.game.close_shop()
         self.show_map()
 
@@ -753,7 +825,10 @@ class WarriorGUI(object):
                                         command=self.root.destroy)
         self.replay_btn.pack(side='left', padx=6)
         self.leave_app_btn.pack(side='left', padx=6)
+        self._fit()
 
     def _replay(self):
+        if self._debounced(('replay', 0)):
+            return
         seed = int(time.time_ns() % 1000000)
         self.start_run(seed)
