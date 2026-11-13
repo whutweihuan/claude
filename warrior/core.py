@@ -19,6 +19,7 @@ class Hero:
     armor: object = None
     relics: list = field(default_factory=list)
     potions: list = field(default_factory=list)
+    weapon_sharpen: int = 0
 
 
 class EnemyInstance(object):
@@ -55,7 +56,7 @@ def merged_mods(hero):
                 m[k] = m.get(k, 0) + v
 
     gear = content.WEAPONS[hero.weapon]
-    m['attack_bonus'] = gear.attack_bonus
+    m['attack_bonus'] = gear.attack_bonus + getattr(hero, 'weapon_sharpen', 0)
     add(gear.mods)
     if hero.armor:
         add(content.ARMORS[hero.armor].mods)
@@ -699,3 +700,294 @@ def generate_map(rng):
         node.next.append(boss_id)
 
     return GameMap(nodes, [n.id for n in by_layer[1]], boss_id)
+
+
+# ---------- 一局编排 ----------
+
+def make_encounter(rng, layer):
+    for a, b, pool, max_count in content.ENCOUNTERS:
+        if a <= layer <= b:
+            ids = [p[0] for p in pool]
+            weights = [p[1] for p in pool]
+            count = rng.randint(1, max_count)
+            return [rng.choices(ids, weights=weights)[0]
+                    for _ in range(count)]
+    return ['goblin']
+
+
+class Run(object):
+    SHARPEN_MAX = 3
+    CHEST_WEAPONS_EARLY = ('longsword', 'spear')
+    CHEST_WEAPONS_LATE = ('flame', 'twinblades', 'axe')
+    CHEST_ARMORS_EARLY = ('cloth', 'leather')
+    CHEST_ARMORS_LATE = ('spiked', 'guardian', 'plate')
+
+    def __init__(self, seed):
+        self.seed = seed
+        self.rng = random.Random(seed)
+        self.hero = Hero(max_hp=80, hp=80, gold=0,
+                         deck=list(content.STARTER_DECK),
+                         weapon='rusty', armor=None, relics=[], potions=[])
+        self.map = generate_map(self.rng)
+        self.current = None
+        self.visited = set()
+        self.node_done = False
+        self.pending = None
+        self.active = None
+        self.shop = None
+        self._loot = None
+        self.seen_events = set()
+        self.finished = False
+        self.outcome = None
+        self.kills = 0
+        self.gold_earned = 0
+        self.depth_reached = 0
+        self.stats = {}
+
+    # ---- 移动与节点 ----
+
+    def choices(self):
+        if self.finished or self.pending is not None:
+            return []
+        if self.current is None:
+            return list(self.map.entry_ids)
+        if not self.node_done:
+            return []
+        return [nid for nid in self.map.nodes[self.current].next
+                if nid not in self.visited]
+
+    def go(self, node_id):
+        if node_id not in self.choices():
+            raise ValueError('现在不能移动到该节点。')
+        self.current = node_id
+        self.visited.add(node_id)
+        node = self.map.nodes[node_id]
+        self.depth_reached = max(self.depth_reached, node.layer)
+        self.node_done = False
+        self.active = None
+        self.shop = None
+        self._loot = None
+
+    def enter(self):
+        node = self.map.nodes[self.current]
+        kind = node.kind
+        tier = layer_tier(node.layer)
+        if kind == 'combat':
+            ids = make_encounter(self.rng, node.layer)
+            self.active = Combat(self.hero, ids, self.rng, tier)
+            self.active.start()
+            return ('combat', self.active)
+        if kind == 'elite':
+            self.active = Combat(
+                self.hero, [self.rng.choice(content.ELITE_IDS)],
+                self.rng, tier)
+            self.active.start()
+            return ('elite', self.active)
+        if kind == 'boss':
+            self.active = Combat(self.hero, [content.BOSS_ID], self.rng, 3)
+            self.active.start()
+            return ('boss', self.active)
+        if kind == 'campfire':
+            return ('campfire', None)
+        if kind == 'event':
+            return ('event', self._pick_event())
+        if kind == 'chest':
+            self._loot = self._make_loot(node.layer)
+            return ('chest', self._loot)
+        if kind == 'shop':
+            # 任务 8：此处装配 make_shop
+            self.shop = None
+            return ('shop', None)
+        raise ValueError('未知节点类型 %r' % kind)
+
+    def _pick_event(self):
+        unseen = [e for e in content.EVENTS.values()
+                  if e.id not in self.seen_events]
+        if not unseen:
+            unseen = list(content.EVENTS.values())
+        ev = self.rng.choice(unseen)
+        self.seen_events.add(ev.id)
+        return ev
+
+    def _make_loot(self, layer):
+        gold = self.rng.randint(20, 40)
+        gear_kind = self.rng.choice(['weapon', 'armor'])
+        if gear_kind == 'weapon':
+            pool = (self.CHEST_WEAPONS_LATE if layer >= 6
+                    else self.CHEST_WEAPONS_EARLY)
+        else:
+            pool = (self.CHEST_ARMORS_LATE if layer >= 6
+                    else self.CHEST_ARMORS_EARLY)
+        return {'gold': gold, 'kind': gear_kind,
+                'id': self.rng.choice(pool)}
+
+    # ---- 战斗结算 ----
+
+    def combat_finished(self):
+        combat = self.active
+        if combat is None:
+            return
+        self.kills += sum(1 for e in combat.enemies if not e.alive)
+        node = self.map.nodes[self.current]
+        if combat.status == 'win':
+            if node.kind == 'boss':
+                self.add_relic('crown')
+                self._finish('win')
+            else:
+                sk = 'elite' if node.kind == 'elite' else 'normal'
+                pending = settle_combat(self.hero, self.rng, node.layer,
+                                        kind=sk)
+                self.gold_earned += pending['gold']
+                if pending['relic_drop']:
+                    self.add_relic(pending['relic_drop'])
+                self.pending = pending
+        elif combat.status == 'lose':
+            self._finish('dead')
+        self.active = None
+
+    def take_card(self, i):
+        if not (self.pending and self.pending['card_choices']):
+            return ['没有可选的卡牌。']
+        if not (0 <= i < len(self.pending['card_choices'])):
+            return ['没有这张牌，请重新选择。']
+        cid, up = self.pending['card_choices'][i]
+        self.hero.deck.append((cid, up))
+        return self._after_pending_step('你将【%s】加入了卡组。'
+                                        % content.CARDS[cid].name)
+
+    def skip_card(self):
+        return self._after_pending_step('你放弃了卡牌奖励。')
+
+    def choose_relic(self, i):
+        if not (self.pending and self.pending['relic_choices']):
+            return ['没有可选的遗物。']
+        if not (0 <= i < len(self.pending['relic_choices'])):
+            return ['没有这件遗物，请重新选择。']
+        rid = self.pending['relic_choices'][i]
+        self.add_relic(rid)
+        return self._after_pending_step('你取走了【%s】！'
+                                        % content.RELICS[rid].name)
+
+    def skip_relic(self):
+        return self._after_pending_step('你留下了遗物。')
+
+    def _after_pending_step(self, line):
+        p = self.pending
+        if p is None:
+            self.node_done = True
+            return [line]
+        if p['relic_choices']:
+            p['relic_choices'] = []
+        elif p['card_choices']:
+            p['card_choices'] = []
+        if not (p['relic_choices'] or p['card_choices']):
+            self.pending = None
+            self.node_done = True
+        return [line]
+
+    # ---- 火堆 ----
+
+    def campfire_options(self):
+        node = self.map.nodes[self.current]
+        if node.kind != 'campfire' or self.node_done:
+            return []
+        forge_slots = [idx for idx, (cid, up) in enumerate(self.hero.deck)
+                       if not up and content.CARDS[cid].upgrade]
+        return [
+            {'kind': 'sleep', 'available': self.hero.hp < self.hero.max_hp,
+             'text': '睡觉：回复 %d 点生命'
+                     % int(self.hero.max_hp * 0.3)},
+            {'kind': 'forge', 'available': bool(forge_slots),
+             'cards': forge_slots, 'text': '锻造：强化一张牌'},
+            {'kind': 'sharpen',
+             'available': self.hero.weapon_sharpen < self.SHARPEN_MAX,
+             'count': self.hero.weapon_sharpen,
+             'text': '打磨武器：攻击伤害 +1（本局限 %d 次）'
+                     % self.SHARPEN_MAX},
+        ]
+
+    def campfire(self, kind, card_slot=None):
+        if self.map.nodes[self.current].kind != 'campfire':
+            return ['这里没有火堆。']
+        if self.node_done:
+            return ['火堆已经用过了。']
+        if kind == 'sleep':
+            if self.hero.hp >= self.hero.max_hp:
+                return ['你生命已满，不必睡觉。火堆还在。']
+            before = self.hero.hp
+            self.hero.hp = min(self.hero.max_hp,
+                               int(self.hero.hp + self.hero.max_hp * 0.3))
+            self.node_done = True
+            return ['你在火堆旁睡了一觉，回复 %d 点生命。'
+                    % (self.hero.hp - before)]
+        if kind == 'forge':
+            forge_list = [o for o in self.campfire_options()
+                          if o['kind'] == 'forge']
+            valid = forge_list[0]['cards'] if forge_list else []
+            if card_slot is None or card_slot not in valid:
+                return ['这张牌无法锻造，请重新选择。']
+            cid, _up = self.hero.deck[card_slot]
+            self.hero.deck[card_slot] = (cid, True)
+            self.node_done = True
+            return ['火光照亮铁砧：【%s+】焕然一新。'
+                    % content.CARDS[cid].name]
+        if kind == 'sharpen':
+            if self.hero.weapon_sharpen >= self.SHARPEN_MAX:
+                return ['武器打磨已达上限（+%d）。' % self.SHARPEN_MAX]
+            self.hero.weapon_sharpen += 1
+            self.node_done = True
+            return ['你把武器磨得雪亮（攻击伤害 +%d）。'
+                    % self.hero.weapon_sharpen]
+        return ['火堆没有这个选项。']
+
+    # ---- 宝箱 / 事件 / 商店 ----
+
+    def take_chest(self, equip):
+        if self._loot is None:
+            return ['这里没有宝箱。']
+        loot = self._loot
+        self._loot = None
+        self.hero.gold += loot['gold']
+        self.gold_earned += loot['gold']
+        gear = (content.WEAPONS.get(loot['id'])
+                or content.ARMORS.get(loot['id']))
+        lines = ['宝箱里有 %d 金币。' % loot['gold']]
+        if equip:
+            if loot['kind'] == 'weapon':
+                old = content.WEAPONS[self.hero.weapon].name
+                self.hero.weapon = loot['id']
+                lines.append('你装备了【%s】，丢下【%s】。'
+                             % (gear.name, old))
+            else:
+                self.hero.armor = loot['id']
+                lines.append('你装备了【%s】。' % gear.name)
+        else:
+            lines.append('你看了一眼【%s】，走开了。' % gear.name)
+        self.node_done = True
+        return lines
+
+    def finish_event(self):
+        self.node_done = True
+        return []
+
+    def close_shop(self):
+        self.node_done = True
+        return []
+
+    # ---- 遗物 ----
+
+    def add_relic(self, rid):
+        if rid in self.hero.relics:
+            return
+        self.hero.relics.append(rid)
+        instant = content.RELICS[rid].hooks.get('instant_gold')
+        if instant:
+            self.hero.gold += instant
+            self.gold_earned += instant
+
+    def _finish(self, outcome):
+        self.outcome = outcome
+        self.finished = True
+        self.pending = None
+        self.stats = {'depth': self.depth_reached, 'kills': self.kills,
+                      'gold_earned': self.gold_earned, 'seed': self.seed}
