@@ -200,5 +200,119 @@ class CombatPlayerTests(unittest.TestCase):
         self.assertEqual(c.enemies[0].hp, 14 - 8)
 
 
+class CombatEnemyTests(unittest.TestCase):
+
+    def set_next_move(self, combat, enemy_idx, **kw):
+        combat.enemies[enemy_idx].pending_move = content.Move(**kw)
+
+    def test_intent_visible_before_acting(self):
+        c1 = make_combat(content.STARTER_DECK, ['goblin', 'wolf'], seed=21)
+        c1.start()
+        texts = [e.intent for e in c1.enemies]
+        for t in texts:
+            self.assertIsNotNone(t)
+            self.assertTrue(t.startswith('攻击') or t.startswith('格挡')
+                            or '强化' in t or '易伤' in t or '毒' in t, t)
+        c2 = make_combat(content.STARTER_DECK, ['goblin', 'wolf'], seed=21)
+        c2.start()
+        self.assertEqual([e.intent for e in c2.enemies], texts)
+        c1.end_turn()
+        c2.end_turn()
+        self.assertEqual([e.intent for e in c1.enemies],
+                         [e.intent for e in c2.enemies])
+
+    def test_enemy_attack_hits_block_first(self):
+        c = make_combat(content.STARTER_DECK, ['goblin'], seed=22)
+        c.start()
+        c.block = 3
+        self.set_next_move(c, 0, name='砍', kind='attack', weight=1, damage=5)
+        hp_before = c.hero.hp
+        c.end_turn()
+        self.assertEqual(c.hero.hp, hp_before - 2)
+        self.assertEqual(c.block, 0)
+
+    def test_multi_hit_attack(self):
+        c = make_combat(content.STARTER_DECK, ['goblin'], seed=23)
+        c.start()
+        self.set_next_move(c, 0, name='咬', kind='attack', weight=1,
+                           damage=3, hits=2)
+        hp_before = c.hero.hp
+        c.end_turn()
+        self.assertEqual(c.hero.hp, hp_before - 6)
+
+    def test_dead_enemy_removed_no_index_error(self):
+        c = make_combat(content.STARTER_DECK, ['goblin', 'goblin'], seed=24)
+        c.start()
+        c.enemies[0].hp = 2
+        seed_hand(c, ['whirl'])
+        c.play_card(0, target=0)  # 4×3：第一段杀死 0 号，后两段转火 1 号
+        self.assertEqual(c.enemies[0].hp, 0)
+        self.assertEqual(c.enemies[1].hp, 14 - 8)
+        seed_hand(c, ['strike'])
+        c.energy = 3
+        c.play_card(0)  # 补刀 1 号 → 胜利
+        self.assertEqual(c.status, 'win')
+        lines = c.play_card(0)
+        self.assertTrue(any('结束' in l for l in lines))
+
+    def test_win_and_lose_status(self):
+        c = make_combat(content.STARTER_DECK, ['goblin'], seed=25)
+        c.start()
+        seed_hand(c, ['heavy', 'heavy'])
+        c.energy = 4
+        c.play_card(0)
+        c.play_card(0)  # 12×2 >= 14
+        self.assertEqual(c.status, 'win')
+        c2 = make_combat(content.STARTER_DECK, ['goblin'], seed=26)
+        c2.start()
+        c2.hero.hp = 3
+        self.set_next_move(c2, 0, name='砍', kind='attack', weight=1,
+                           damage=5)
+        c2.end_turn()
+        self.assertEqual(c2.status, 'lose')
+        self.assertEqual(c2.hero.hp, 0)
+
+    def test_elite_cycle_moves_learnable(self):
+        c = make_combat(content.STARTER_DECK, ['golem'], seed=27)
+        c.start()
+        self.assertTrue(c.enemies[0].intent.startswith('格挡 12'),
+                        c.enemies[0].intent)
+        c.end_turn()
+        self.assertEqual(c.enemies[0].block, 12)
+        self.assertIn('力量 +2', c.enemies[0].intent)
+        c.end_turn()
+        self.assertEqual(c.enemies[0].strength, 2)
+        self.assertTrue(c.enemies[0].intent.startswith('攻击 11×2'),
+                        c.enemies[0].intent)
+
+    def test_boss_phase_switch(self):
+        c = make_combat(content.STARTER_DECK, ['demon_lord'], seed=28)
+        c.start()
+        self.assertTrue(c.enemies[0].intent.startswith('攻击 12'))
+        c.enemies[0].hp = 80  # 恰好一半 → 触发阶段 2
+        c.end_turn()
+        self.assertGreaterEqual(c.enemies[0].strength, 2)
+        self.assertTrue(c.enemies[0].intent.startswith('攻击'),
+                        c.enemies[0].intent)
+        names = [m.name for m in content.ENEMIES['demon_lord'].phase2_moves]
+        self.assertIn(c.enemies[0].pending_move.name, names)
+        c.end_turn()
+        self.assertGreaterEqual(c.enemies[0].strength, 4)
+
+    def test_enemy_debuffs_on_hero(self):
+        # 规格 6.2：易伤作用于"受到的攻击伤害 ×1.5"
+        c = make_combat(content.STARTER_DECK, ['goblin'], seed=29)
+        c.start()
+        self.set_next_move(c, 0, name='嘲', kind='debuff', weight=1,
+                           vulnerable=2)
+        c.end_turn()
+        self.assertEqual(c.vulnerable, 2)
+        self.set_next_move(c, 0, name='砍', kind='attack', weight=1, damage=5)
+        hp_before = c.hero.hp
+        c.end_turn()
+        self.assertEqual(c.hero.hp, hp_before - 7)  # int(5 × 1.5)
+        self.assertEqual(c.vulnerable, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

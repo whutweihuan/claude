@@ -34,6 +34,8 @@ class EnemyInstance(object):
         self.poison = 0
         self.dmg_add = TIER_DMG_ADD.get(tier, 0)
         self.intent = None
+        self.pending_move = None
+        self.in_phase2 = False
         self._move_idx = 0
 
     @property
@@ -103,7 +105,31 @@ class Combat(object):
         return lines
 
     def _gen_intents(self):
-        """任务 4 实装敌人意图；此处占位。"""
+        for e in self.enemies:
+            if not e.alive:
+                e.intent = None
+                continue
+            d = e.defn
+            if d.phase2_at_half and not e.in_phase2 \
+                    and e.hp <= e.max_hp / 2.0:
+                e.in_phase2 = True
+                e._move_idx = 0
+            e.pending_move = self._pick_move(e)
+            e.intent = format_intent(e.pending_move, e)
+
+    def _pick_move(self, enemy):
+        pool = enemy.defn.phase2_moves if enemy.in_phase2 else enemy.defn.moves
+        if enemy.defn.cycle and not enemy.in_phase2:
+            mv = pool[enemy._move_idx % len(pool)]
+            enemy._move_idx += 1
+            return mv
+        total = sum(m.weight for m in pool)
+        r = self.rng.randrange(total)
+        for m in pool:
+            if r < m.weight:
+                return m
+            r -= m.weight
+        return pool[-1]
 
     def end_turn(self):
         lines = []
@@ -117,8 +143,64 @@ class Combat(object):
         return lines
 
     def _enemy_turn(self):
-        """任务 4 实装敌人行动；此处占位。"""
-        return []
+        lines = []
+        for e in self.enemies:
+            if not e.alive or self.status != 'playing':
+                continue
+            if e.poison > 0:
+                e.hp -= e.poison
+                lines.append('【%s】毒发，受到 %d 点伤害。'
+                             % (e.name, e.poison))
+                if e.hp <= 0:
+                    e.hp = 0
+                    lines.append('【%s】被击败！' % e.name)
+                    continue
+            if e.defn.phase2_at_half and not e.in_phase2 \
+                    and e.hp <= e.max_hp / 2.0:
+                e.in_phase2 = True
+                e._move_idx = 0
+                lines.append('【%s】发出咆哮，形态崩变！' % e.name)
+            if e.in_phase2 and e.defn.phase2_per_turn_strength:
+                e.strength += e.defn.phase2_per_turn_strength
+            mv = e.pending_move or self._pick_move(e)
+            e.pending_move = None
+            lines.extend(self._exec_move(e, mv))
+        return lines
+
+    def _exec_move(self, enemy, mv):
+        lines = []
+        if mv.kind == 'attack':
+            for _ in range(mv.hits):
+                dmg = mv.damage + enemy.strength + enemy.dmg_add
+                if self.vulnerable > 0:
+                    dmg = int(dmg * 1.5)
+                    self.vulnerable -= 1
+                absorbed, real = self.damage_hero(dmg)
+                text = '【%s】使用【%s】：' % (enemy.name, mv.name)
+                if absorbed and real:
+                    text += '格挡 %d，受到 %d 点伤害。' % (absorbed, real)
+                elif absorbed:
+                    text += '全部被格挡（%d）。' % absorbed
+                else:
+                    text += '你受到 %d 点伤害。' % real
+                lines.append(text)
+                if self.status != 'playing':
+                    break
+        else:
+            if mv.block:
+                enemy.block += mv.block
+                lines.append('【%s】获得 %d 点格挡。' % (enemy.name, mv.block))
+            if mv.strength:
+                enemy.strength += mv.strength
+                lines.append('【%s】力量 +%d。' % (enemy.name, mv.strength))
+            if mv.kind == 'debuff' and mv.vulnerable:
+                self.vulnerable += mv.vulnerable
+                lines.append('你对【%s】的诅咒屈服：易伤 %d 层。'
+                             % (enemy.name, mv.vulnerable))
+            if mv.kind == 'poison' and mv.poison:
+                self.poison += mv.poison
+                lines.append('你中毒（%d）。' % self.poison)
+        return lines
 
     # ---------- 出牌 ----------
 
@@ -253,6 +335,23 @@ class Combat(object):
             self._check_end()
             return ['毒素发作，你受到 %d 点伤害。' % n]
         return []
+
+
+def format_intent(mv, enemy):
+    parts = []
+    if mv.kind == 'attack':
+        d = mv.damage + enemy.strength + enemy.dmg_add
+        parts.append('攻击 %d×%d' % (d, mv.hits) if mv.hits > 1
+                     else '攻击 %d' % d)
+    if mv.block:
+        parts.append('格挡 %d' % mv.block)
+    if mv.strength:
+        parts.append('力量 +%d' % mv.strength)
+    if mv.vulnerable:
+        parts.append('施加易伤 %d' % mv.vulnerable)
+    if mv.poison:
+        parts.append('毒 %d' % mv.poison)
+    return ' / '.join(parts) or '蓄势'
 
 
 def apply_effect(hero, combat, eff, target):
