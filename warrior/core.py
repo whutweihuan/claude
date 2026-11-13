@@ -43,6 +43,27 @@ class EnemyInstance(object):
         return self.hp > 0
 
 
+def merged_mods(hero):
+    """聚合武器词条、防具词条与遗物钩子为扁平 dict。"""
+    m = {}
+
+    def add(src):
+        for k, v in src.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                m[k] = v
+            else:
+                m[k] = m.get(k, 0) + v
+
+    gear = content.WEAPONS[hero.weapon]
+    m['attack_bonus'] = gear.attack_bonus
+    add(gear.mods)
+    if hero.armor:
+        add(content.ARMORS[hero.armor].mods)
+    for rid in hero.relics:
+        add(content.RELICS[rid].hooks)
+    return m
+
+
 class Combat(object):
     BASE_ENERGY = 3
     BASE_DRAW = 5
@@ -68,6 +89,9 @@ class Combat(object):
         self.attacked_this_turn = False
         self._pending_bonus = 0
         self._card_exhausts = False
+        self.mods = merged_mods(hero)
+        self.death_saved = False
+        self._cards_played_this_turn = 0
 
     # ---------- 回合流程 ----------
 
@@ -76,15 +100,59 @@ class Combat(object):
 
     def _begin_player_turn(self):
         lines = []
+        m = self.mods
         self.turn += 1
-        self.block = 0
+        if not m.get('block_persist'):
+            self.block = 0
         if self.poison > 0:
-            lines.extend(self._tick_poison(hero_side=True))
-        self.energy = self.BASE_ENERGY + self.powers.get('energy_per_turn', 0)
+            self.hero.hp -= self.poison
+            lines.append('毒素发作，你受到 %d 点伤害。' % self.poison)
+            self._check_end()
+            if self.status != 'playing':
+                return lines
+        if m.get('turn_start_self_damage'):
+            self.hero.hp -= m['turn_start_self_damage']
+            lines.append('燃火之刃灼伤你 %d 点。'
+                         % m['turn_start_self_damage'])
+            self._check_end()
+            if self.status != 'playing':
+                return lines
+        if self.turn == 1:
+            if m.get('start_block'):
+                self.block += m['start_block']
+                lines.append('装备提供 %d 点格挡。' % m['start_block'])
+            if m.get('heal'):
+                before = self.hero.hp
+                self.hero.hp = min(self.hero.max_hp,
+                                   self.hero.hp + m['heal'])
+                if self.hero.hp > before:
+                    lines.append('防具让你回复 %d 点生命。'
+                                 % (self.hero.hp - before))
+            if m.get('poison_start'):
+                for e in self.enemies:
+                    if e.alive:
+                        e.poison += m['poison_start']
+                lines.append('战纹面具让所有敌人中毒。')
+            if m.get('low_hp_strength') and self.hero.hp \
+                    < m.get('low_hp_pct', 0) * self.hero.max_hp:
+                self.strength += m['low_hp_strength']
+                lines.append('巨魔之牙生效：力量 +%d。'
+                             % m['low_hp_strength'])
+        energy = self.BASE_ENERGY + m.get('energy_per_turn', 0) \
+            + self.powers.get('energy_per_turn', 0)
+        if self.turn == 1:
+            energy += m.get('first_turn_energy', 0)
+        if m.get('every_n_turns') and self.turn % m['every_n_turns'] == 0:
+            energy += m.get('turn_start_energy', 0)
+        self.energy = max(0, energy)
         self.attacked_this_turn = False
+        self._cards_played_this_turn = 0
         if self.powers.get('strength_per_turn'):
             self.strength += self.powers['strength_per_turn']
-        n = self.BASE_DRAW + self.powers.get('draw_per_turn', 0)
+        n = self.BASE_DRAW + m.get('draw_per_turn', 0) \
+            + self.powers.get('draw_per_turn', 0)
+        if self.turn == 1:
+            n += m.get('first_turn_draw', 0)
         lines.extend(self._draw(n))
         if self.status == 'playing':
             self._gen_intents()
@@ -135,6 +203,13 @@ class Combat(object):
         lines = []
         if self.powers.get('block_per_turn'):
             self.block += self.powers['block_per_turn']
+        if self.mods.get('turn_end_heal'):
+            before = self.hero.hp
+            self.hero.hp = min(self.hero.max_hp,
+                               self.hero.hp + self.mods['turn_end_heal'])
+            if self.hero.hp > before:
+                lines.append('旅行口粮回复 %d 点生命。'
+                             % (self.hero.hp - before))
         self.discard_pile.extend(self.hand)
         self.hand = []
         lines.extend(self._enemy_turn())
@@ -186,6 +261,15 @@ class Combat(object):
                 lines.append(text)
                 if self.status != 'playing':
                     break
+            thorns = self.mods.get('thorns', 0)
+            if thorns and enemy.alive:
+                enemy.hp -= thorns
+                lines.append('尖刺/狼牙反伤：【%s】受到 %d 点伤害。'
+                             % (enemy.name, thorns))
+                if enemy.hp <= 0:
+                    enemy.hp = 0
+                    lines.append('【%s】被击败！' % enemy.name)
+                self._check_end()
         else:
             if mv.block:
                 enemy.block += mv.block
@@ -223,6 +307,7 @@ class Combat(object):
         effects, _text = self.effects_for(card_id, upgraded)
         self.energy -= cost
         self.hand.pop(i)
+        self._cards_played_this_turn += 1
         self._pending_bonus = 0
         self._card_exhausts = any(eff[0] == 'exhaust' for eff in effects)
         lines = ['你打出【%s】。' % card.name]
@@ -240,7 +325,13 @@ class Combat(object):
         return lines
 
     def _card_cost(self, card):
-        return card.cost
+        cost = card.cost
+        if self._cards_played_this_turn == 0:
+            cost += self.mods.get('first_card_extra_cost', 0)
+        if self.mods.get('cost_adjust_kind') == card.kind:
+            cost = max(cost + self.mods.get('cost_adjust_delta', 0),
+                       self.mods.get('cost_adjust_min', 0))
+        return max(0, cost)
 
     def snapshot(self):
         return {
@@ -286,14 +377,15 @@ class Combat(object):
         lines = []
         if enemy is None or not enemy.alive:
             return lines
-        dmg = n + content.WEAPONS[self.hero.weapon].attack_bonus \
-            + self.strength
+        dmg = n + self.mods.get('attack_bonus', 0) \
+            + self.mods.get('attack_damage_base', 0) + self.strength
         if self._pending_bonus:
             dmg += self._pending_bonus
             self._pending_bonus = 0
-        if self.powers.get('first_attack_bonus') \
-                and not self.attacked_this_turn:
-            dmg += self.powers['first_attack_bonus']
+        fab = self.powers.get('first_attack_bonus', 0) \
+            + self.mods.get('first_attack_bonus', 0)
+        if fab and not self.attacked_this_turn:
+            dmg += fab
         self.attacked_this_turn = True
         if enemy.vulnerable > 0:
             dmg = int(dmg * 1.5)
@@ -323,18 +415,25 @@ class Combat(object):
 
     def _check_end(self):
         if self.hero.hp <= 0:
+            ds = self._find_death_save()
+            if ds is not None:
+                rid, pct = ds
+                self.hero.relics.remove(rid)
+                self.hero.hp = int(-(-self.hero.max_hp * pct // 1))
+                self.death_saved = True
+                self.mods = merged_mods(self.hero)
+                return
             self.hero.hp = 0
             self.status = 'lose'
         elif all(not e.alive for e in self.enemies):
             self.status = 'win'
 
-    def _tick_poison(self, hero_side):
-        if hero_side:
-            n = self.poison  # 毒不衰减（规格）
-            self.hero.hp -= n
-            self._check_end()
-            return ['毒素发作，你受到 %d 点伤害。' % n]
-        return []
+    def _find_death_save(self):
+        for rid in self.hero.relics:
+            pct = content.RELICS[rid].hooks.get('death_save')
+            if pct:
+                return rid, pct
+        return None
 
 
 def format_intent(mv, enemy):
@@ -427,3 +526,84 @@ def apply_effect(hero, combat, eff, target):
     else:
         raise ValueError('未知战斗原语: %r' % (eff,))
     return lines
+
+
+# ---------- 地图层级与奖励结算 ----------
+
+def layer_tier(layer):
+    return 1 if layer <= 4 else (2 if layer <= 8 else 3)
+
+
+RARITY_WEIGHTS_EARLY = [('common', 8), ('uncommon', 3), ('rare', 1)]
+RARITY_WEIGHTS_LATE = [('common', 5), ('uncommon', 4), ('rare', 2)]
+
+
+def relic_pool(source):
+    """source: 'common' 普通掉落 / 'elite' 精英三选一 / 'shop' 商店 / 'all'。"""
+    rarities = {'common': ('common',), 'elite': ('uncommon', 'rare'),
+                'shop': ('common', 'uncommon', 'rare'),
+                'all': ('common', 'uncommon', 'rare')}[source]
+    return [rid for rid, r in content.RELICS.items()
+            if r.rarity in rarities]
+
+
+def card_reward_choice(rng, layer, n=3):
+    pools = {rar: [cid for cid, c in content.CARDS.items()
+                   if content.CARD_RARITY[cid] == rar]
+             for rar, _w in RARITY_WEIGHTS_EARLY}
+    weights = RARITY_WEIGHTS_EARLY if layer < 7 else RARITY_WEIGHTS_LATE
+    total = sum(w for _r, w in weights)
+    picks = []
+    guard = 0
+    while len(picks) < n and guard < 200:
+        guard += 1
+        r = rng.randrange(total)
+        chosen_rar = weights[-1][0]
+        for rar, w in weights:
+            if r < w:
+                chosen_rar = rar
+                break
+            r -= w
+        cid = rng.choice(pools[chosen_rar])
+        card = (cid, False)
+        if card not in picks:
+            picks.append(card)
+    return picks
+
+
+def settle_combat(hero, rng, layer, kind='normal'):
+    """战斗胜利后的奖励结算。返回 {gold, relic_choices, relic_drop,
+    card_choices, lines}。金币直接入账。"""
+    mods = merged_mods(hero)
+    tier = layer_tier(layer)
+    lines = []
+    if kind == 'elite':
+        gold = rng.randint(30, 45)
+    else:
+        gold = rng.randint(12, 18) + tier * 4
+    if mods.get('gold_mult'):
+        gold = int(gold * mods['gold_mult'])
+    hero.gold += gold
+    lines.append('获得 %d 金币。' % gold)
+    result = {'gold': gold, 'relic_choices': [], 'relic_drop': None,
+              'card_choices': [], 'lines': lines}
+    if kind == 'elite':
+        pool = relic_pool('elite')
+        choices = []
+        while len(choices) < 3:
+            pick = rng.choice(pool)
+            if pick not in choices:
+                choices.append(pick)
+        result['relic_choices'] = choices
+    else:
+        if rng.random() < 0.15:
+            result['relic_drop'] = rng.choice(relic_pool('common'))
+        n = 3 + int(mods.get('card_reward_extra', 0))
+        result['card_choices'] = card_reward_choice(rng, layer, n)
+    if mods.get('combat_end_heal'):
+        before = hero.hp
+        hero.hp = min(hero.max_hp, hero.hp + mods['combat_end_heal'])
+        if hero.hp > before:
+            lines.append('炭炉石温暖着你：回复 %d 点生命。'
+                         % (hero.hp - before))
+    return result

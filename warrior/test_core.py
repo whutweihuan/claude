@@ -314,5 +314,229 @@ class CombatEnemyTests(unittest.TestCase):
         self.assertEqual(c.vulnerable, 1)
 
 
+class HookTests(unittest.TestCase):
+
+    NOOP = dict(name='凝视', kind='block', weight=1)  # 敌人不伤害的占位招式
+
+    def combat(self, enemies=('goblin',), weapon='rusty', armor=None,
+               relics=(), hp=80, seed=31):
+        hero = core.Hero(max_hp=80, hp=hp, gold=0,
+                         deck=list(content.STARTER_DECK), weapon=weapon,
+                         armor=armor, relics=list(relics), potions=[])
+        c = core.Combat(hero, list(enemies), random.Random(seed), tier=1)
+        c.start()
+        return c
+
+    def set_next_move(self, combat, enemy_idx, **kw):
+        combat.enemies[enemy_idx].pending_move = content.Move(**kw)
+
+    def test_rusty_sword_zero(self):
+        c = self.combat()
+        seed_hand(c, ['strike'])
+        c.play_card(0)
+        self.assertEqual(c.enemies[0].hp, 8)
+
+    def test_axe_first_card_extra_cost(self):
+        c = self.combat(weapon='axe')
+        seed_hand(c, ['defend', 'defend'])
+        c.play_card(0)
+        self.assertEqual(c.energy, 1)
+        c.play_card(0)
+        self.assertEqual(c.energy, 0)
+        seed_hand(c, ['strike'])
+        c.energy = 3
+        c.play_card(0)
+        self.assertEqual(c.enemies[0].hp, 14 - 10)
+
+    def test_flame_turn_start_self_damage(self):
+        c = self.combat(weapon='flame')
+        self.assertEqual(c.hero.hp, 78)
+        self.set_next_move(c, 0, **self.NOOP)
+        c.end_turn()
+        self.assertEqual(c.hero.hp, 76)
+
+    def test_twinblades_draw_and_penalty(self):
+        c = self.combat(weapon='twinblades')
+        self.assertEqual(len(c.hand), 6)
+        seed_hand(c, ['strike'])
+        c.play_card(0)
+        self.assertEqual(c.enemies[0].hp, 14 - 5)
+
+    def test_armor_start_block(self):
+        c = self.combat(armor='leather')
+        self.assertEqual(c.block, 5)
+        c2 = self.combat(armor='plate')
+        self.assertEqual(c2.block, 9)
+        self.assertEqual(c2.energy, 2)
+
+    def test_spiked_thorns(self):
+        c = self.combat(armor='spiked')
+        self.assertEqual(c.block, 3)
+        self.set_next_move(c, 0, name='砍', kind='attack', weight=1,
+                           damage=5)
+        hp_hero = c.hero.hp
+        c.end_turn()
+        self.assertEqual(c.hero.hp, hp_hero - 2)
+        self.assertEqual(c.enemies[0].hp, 14 - 3)
+
+    def test_guardian_heal_start(self):
+        c = self.combat(armor='guardian', hp=70)
+        self.assertEqual(c.hero.hp, 72)
+        self.assertEqual(c.block, 4)
+
+    def test_relic_coffee_horn(self):
+        c = self.combat(relics=['coffee'])
+        self.assertEqual(c.energy, 4)
+        c2 = self.combat(relics=['horn'])
+        self.assertEqual(len(c2.hand), 7)
+
+    def test_relic_tooth(self):
+        self.assertEqual(self.combat(relics=['tooth'], hp=20).strength, 2)
+        self.assertEqual(self.combat(relics=['tooth']).strength, 0)
+
+    def test_relic_torch_and_whetstone(self):
+        c = self.combat(relics=['torch'])
+        seed_hand(c, ['strike'])
+        c.play_card(0)
+        self.assertEqual(c.enemies[0].hp, 14 - 7)
+        c2 = self.combat(enemies=('knight',), relics=['whetstone'])
+        seed_hand(c2, ['strike', 'strike'])
+        c2.play_card(0)
+        c2.play_card(0)
+        self.assertEqual(c2.enemies[0].hp, 32 - 8 - 6)
+
+    def test_relic_bandage(self):
+        c = self.combat(relics=['bandage'])
+        self.assertEqual(c.block, 4)
+
+    def test_relic_ember_on_settle(self):
+        c = self.combat(relics=['ember'], hp=70)
+        seed_hand(c, ['heavy', 'heavy'])
+        c.energy = 4
+        c.play_card(0)
+        c.play_card(0)
+        self.assertEqual(c.status, 'win')
+        core.settle_combat(c.hero, random.Random(99), layer=3)
+        self.assertEqual(c.hero.hp, 74)
+
+    def test_relic_ration_turn_end(self):
+        c = self.combat(relics=['ration'], hp=70)
+        self.set_next_move(c, 0, **self.NOOP)
+        c.end_turn()
+        self.assertEqual(c.hero.hp, 72)
+
+    def test_relic_warpaint(self):
+        c = self.combat(enemies=('goblin', 'wolf'), relics=['warpaint'])
+        self.assertEqual([e.poison for e in c.enemies], [1, 1])
+        self.set_next_move(c, 0, **self.NOOP)
+        self.set_next_move(c, 1, **self.NOOP)
+        c.end_turn()
+        self.assertEqual(c.enemies[0].hp, 13)
+
+    def test_relic_iron_heel_block_persist(self):
+        c = self.combat(relics=['iron_heel'])
+        seed_hand(c, ['defend'])
+        c.play_card(0)
+        self.set_next_move(c, 0, **self.NOOP)
+        c.end_turn()
+        self.assertEqual(c.block, 5)
+
+    def test_relic_hourglass_energy(self):
+        c = self.combat(relics=['hourglass'])
+        self.set_next_move(c, 0, **self.NOOP)
+        c.end_turn()
+        self.set_next_move(c, 0, **self.NOOP)
+        c.end_turn()
+        self.assertEqual(c.turn, 3)
+        self.assertEqual(c.energy, 4)
+
+    def test_relic_idol_power_cost(self):
+        c = self.combat(relics=['idol'])
+        seed_hand(c, ['fury'])
+        c.energy = 0
+        lines = c.play_card(0)
+        self.assertFalse(any('能量不足' in l for l in lines))
+        self.assertIn('first_attack_bonus', c.powers)
+
+    def test_relic_fang_necklace_thorns(self):
+        c = self.combat(relics=['fang_necklace'])
+        self.set_next_move(c, 0, name='砍', kind='attack', weight=1, damage=5)
+        hp_hero = c.hero.hp
+        c.end_turn()
+        self.assertEqual(c.hero.hp, hp_hero - 5)
+        self.assertEqual(c.enemies[0].hp, 14 - 2)
+
+    def test_relic_vial_death_save_once(self):
+        c = self.combat(relics=['vial'], hp=3)
+        self.set_next_move(c, 0, name='砍', kind='attack', weight=1,
+                           damage=10)
+        c.end_turn()
+        self.assertEqual(c.hero.hp, 24)
+        self.assertNotIn('vial', c.hero.relics)
+        self.assertEqual(c.status, 'playing')
+        self.set_next_move(c, 0, name='砍', kind='attack', weight=1,
+                           damage=30)
+        c.end_turn()
+        self.assertEqual(c.status, 'lose')
+
+    def test_relic_purse_gold_mult(self):
+        h1 = core.Hero(max_hp=80, hp=80, gold=0,
+                       deck=list(content.STARTER_DECK), weapon='rusty',
+                       relics=[], potions=[])
+        h2 = core.Hero(max_hp=80, hp=80, gold=0,
+                       deck=list(content.STARTER_DECK), weapon='rusty',
+                       relics=['purse'], potions=[])
+        r1 = core.settle_combat(h1, random.Random(51), layer=1)
+        r2 = core.settle_combat(h2, random.Random(51), layer=1)
+        self.assertEqual(r2['gold'], int(r1['gold'] * 1.25))
+        self.assertEqual(h2.gold, r2['gold'])
+
+    def test_relic_lucky_dice_four_choices(self):
+        hero = core.Hero(max_hp=80, hp=80, gold=0,
+                         deck=list(content.STARTER_DECK), weapon='rusty',
+                         relics=[], potions=[])
+        r = core.settle_combat(hero, random.Random(60), layer=2)
+        self.assertEqual(len(r['card_choices']), 3)
+        hero2 = core.Hero(max_hp=80, hp=80, gold=0,
+                          deck=list(content.STARTER_DECK), weapon='rusty',
+                          relics=['lucky_dice'], potions=[])
+        r2 = core.settle_combat(hero2, random.Random(60), layer=2)
+        self.assertEqual(len(r2['card_choices']), 4)
+        self.assertEqual(len(set(r2['card_choices'])), 4)
+
+    def test_settle_elite(self):
+        hero = core.Hero(max_hp=80, hp=80, gold=0,
+                         deck=list(content.STARTER_DECK), weapon='rusty',
+                         relics=[], potions=[])
+        r = core.settle_combat(hero, random.Random(70), layer=6,
+                               kind='elite')
+        self.assertEqual(len(r['relic_choices']), 3)
+        for rid in r['relic_choices']:
+            self.assertIn(content.RELICS[rid].rarity, ('uncommon', 'rare'))
+        self.assertTrue(30 <= r['gold'] <= 45)
+        self.assertEqual(r['card_choices'], [])
+
+    def test_settle_normal_gold_range(self):
+        hero = core.Hero(max_hp=80, hp=80, gold=0,
+                         deck=list(content.STARTER_DECK), weapon='rusty',
+                         relics=[], potions=[])
+        drops = 0
+        for s in range(200):
+            r = core.settle_combat(hero, random.Random(s), layer=1)
+            self.assertTrue(16 <= r['gold'] <= 22)
+            if r['relic_drop']:
+                drops += 1
+        self.assertTrue(10 <= drops <= 40, drops)
+
+    def test_relic_crown_boss_only(self):
+        self.assertEqual(content.RELICS['crown'].rarity, 'boss')
+        for pool in core.relic_pool('elite'):
+            self.assertNotEqual(pool, 'crown')
+
+    def test_all_relics_table_shape(self):
+        self.assertEqual(len(content.RELICS), 19)
+        content.validate_content()
+
+
 if __name__ == '__main__':
     unittest.main()

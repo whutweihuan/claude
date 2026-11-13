@@ -220,6 +220,69 @@ POTIONS = {
 
 
 @dataclass
+class Relic:
+    id: str
+    name: str
+    rarity: str          # 'common' | 'uncommon' | 'rare' | 'boss'
+    text: str
+    hooks: Dict
+
+
+RELIC_HOOK_KEYS = frozenset([
+    'first_turn_energy', 'first_turn_draw', 'start_block', 'low_hp_pct',
+    'low_hp_strength', 'poison_start', 'combat_end_heal', 'turn_end_heal',
+    'attack_damage_base', 'first_attack_bonus', 'thorns', 'block_persist',
+    'death_save', 'card_reward_extra', 'gold_mult', 'shop_discount',
+    'instant_gold', 'cost_adjust_kind', 'cost_adjust_delta',
+    'cost_adjust_min', 'turn_start_energy', 'every_n_turns', 'boss_trophy',
+])
+
+
+def _r(rid, name, rarity, text, hooks):
+    RELICS[rid] = Relic(rid, name, rarity, text, hooks)
+
+
+RELICS = {}
+
+_r('ember', '炭炉石', 'uncommon', '每场战斗结束后回复 4 点生命。',
+   {'combat_end_heal': 4})
+_r('coffee', '咖啡壶', 'rare', '每场战斗第一回合能量 +1。',
+   {'first_turn_energy': 1})
+_r('horn', '战吼号角', 'uncommon', '每场战斗第一回合多抽 2 张牌。',
+   {'first_turn_draw': 2})
+_r('purse', '钱包', 'common', '获得的金币 +25%。', {'gold_mult': 1.25})
+_r('tooth', '巨魔之牙', 'rare', '开战时若生命低于 30%，力量 +2。',
+   {'low_hp_pct': 0.3, 'low_hp_strength': 2})
+_r('torch', '火把', 'uncommon', '攻击伤害 +1。', {'attack_damage_base': 1})
+_r('bandage', '旧绷带', 'common', '战斗开始格挡 +4。', {'start_block': 4})
+_r('ration', '旅行口粮', 'common', '每回合结束回复 2 点生命。',
+   {'turn_end_heal': 2})
+_r('whetstone', '磨刀石', 'uncommon', '每回合第一次攻击伤害 +2。',
+   {'first_attack_bonus': 2})
+_r('hag_hat', '商人之帽', 'uncommon', '商店价格 80%。',
+   {'shop_discount': 0.8})
+_r('lucky_dice', '幸运骰', 'common', '卡牌奖励多 1 个选项。',
+   {'card_reward_extra': 1})
+_r('iron_heel', '铁踵', 'rare', '回合结束时格挡不再清零。',
+   {'block_persist': 1})
+_r('warpaint', '战纹面具', 'uncommon', '开战时所有敌人获得 1 层毒。',
+   {'poison_start': 1})
+_r('vial', '血之圣瓶', 'rare', '受到致死伤害时以 30% 生命站起（本局限一次）。',
+   {'death_save': 0.3})
+_r('nugget', '金锭', 'common', '获得时立即 +30 金币。', {'instant_gold': 30})
+_r('fang_necklace', '狼牙项链', 'uncommon', '攻击你的敌人受到 2 点伤害。',
+   {'thorns': 2})
+_r('idol', '战神小像', 'rare', '能力牌费用 -1（最低 0）。',
+   {'cost_adjust_kind': 'power', 'cost_adjust_delta': -1,
+    'cost_adjust_min': 0})
+_r('hourglass', '时之沙漏', 'rare', '每逢第 3 的倍数回合，能量 +1。',
+   {'turn_start_energy': 1, 'every_n_turns': 3})
+_r('crown', '魔王冠冕', 'boss', '通关纪念。', {'boss_trophy': 1})
+
+RELIC_RARITIES = ('common', 'uncommon', 'rare')
+
+
+@dataclass
 class Move:
     name: str
     kind: str            # 'attack' | 'block' | 'buff' | 'debuff' | 'poison'
@@ -468,6 +531,16 @@ def validate_content():
                     raise ValueError('gear %s: 未知词条 %r' % (gid, key))
     for pid, pot in POTIONS.items():
         _check_effects(pot.effects, 'potion ' + pid)
+    for rid, relic in RELICS.items():
+        if relic.rarity not in RELIC_RARITIES + ('boss',):
+            raise ValueError('relic %s: 稀有度非法' % rid)
+        if not relic.text:
+            raise ValueError('relic %s: 缺描述' % rid)
+        for key in relic.hooks:
+            if key not in RELIC_HOOK_KEYS:
+                raise ValueError('relic %s: 未知钩子 %r' % (rid, key))
+    if sum(1 for r in RELICS.values() if r.rarity == 'boss') != 1:
+        raise ValueError('boss 遗物应恰为 1 件')
     for eid, enemy in ENEMIES.items():
         if len(enemy.moves) < 2:
             raise ValueError('enemy %s: 招式不足' % eid)
@@ -504,6 +577,7 @@ def validate_content():
         + [g.name for g in ARMORS.values()] \
         + [p.name for p in POTIONS.values()] \
         + [e.name for e in ENEMIES.values()] \
+        + [r.name for r in RELICS.values()] \
         + [ev.title for ev in EVENTS.values()]
     if len(set(names)) != len(names):
         raise ValueError('存在重名条目')
