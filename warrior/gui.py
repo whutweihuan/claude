@@ -274,7 +274,7 @@ class WarriorGUI(object):
             if not card['playable']:
                 btn.state(['disabled'])
             self.hand_buttons.append(btn)
-        _flow_layout(hf, self.hand_buttons, self.WINDOW_W - 80)
+        _flow_layout(hf, self.hand_buttons, self.WINDOW_W - 140)
         af = ttk.Frame(outer)
         af.pack(fill='x', pady=2)
         self.end_btn = ttk.Button(af, text='结束回合',
@@ -292,7 +292,8 @@ class WarriorGUI(object):
                                      command=self._cancel_targeting)
         if targeting:
             self.cancel_btn.pack(side='left', padx=4)
-        self.log_text = ScrolledText(outer, height=7, wrap='word')
+        self.log_text = ScrolledText(outer, height=7, width=58,
+                                      wrap='word')
         self.log_text.pack(fill='x', pady=4)
         self._render_log()
 
@@ -476,7 +477,7 @@ class WarriorGUI(object):
                     command=lambda s=slot: self._camp_forge_pick(s))
                 self.forge_card_buttons[slot] = btn
                 widgets.append(btn)
-            _flow_layout(grid, widgets, self.WINDOW_W - 80)
+            _flow_layout(grid, widgets, self.WINDOW_W - 140)
         msg = getattr(self, '_camp_msg', None)
         if msg:
             ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w',
@@ -685,7 +686,7 @@ class WarriorGUI(object):
                     command=lambda slot=j: self._shop_remove_pick(slot))
                 self.deck_card_buttons[j] = btn
                 widgets.append(btn)
-            _flow_layout(grid, widgets, self.WINDOW_W - 80)
+            _flow_layout(grid, widgets, self.WINDOW_W - 140)
         msg = getattr(self, '_shop_msg', None)
         if msg:
             ttk.Label(outer, text=msg, wraplength=900).pack(anchor='w')

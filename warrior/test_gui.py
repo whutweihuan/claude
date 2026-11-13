@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Tkinter 鼠标界面测试。回调级单测可在有/无显示下运行（无显示则 skip），
 子进程 DPI 布局回归见任务 7。"""
+import os
+import sys
 import unittest
 
 import tkinter as tk
@@ -425,6 +427,128 @@ class EndScreenTests(GuiTestCase):
         app = make_app(self.root, seed=7, on_finish=calls.append)
         app._on_close()
         self.assertEqual(calls, [])
+
+
+LAYOUT_SCRIPT = r'''
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+import tkinter as tk
+import tkinter.font as tkfont
+
+import core
+import content
+import gui
+import test_run
+
+gui._enable_dpi_awareness()
+root = tk.Tk()
+app = gui.WarriorGUI(root, on_finish=lambda r: 'ok')
+app.start_run(4242)
+game = app.game
+problems = []
+
+
+def walk(w):
+    yield w
+    for c in w.winfo_children():
+        for g in walk(c):
+            yield g
+
+
+def check(tag):
+    root.update_idletasks()
+    root.update()
+    dflt = tkfont.nametofont('TkDefaultFont')
+    for w in walk(root):
+        if not w.winfo_ismapped():
+            continue
+        cls = w.winfo_class()
+        if cls in ('Label', 'Button', 'TLabel', 'TButton'):
+            text = str(w.cget('text'))
+            if not text:
+                continue
+            for line in text.split('\n'):
+                need = dflt.measure(line)
+                if need > w.winfo_width() + 2:
+                    problems.append('%s: %r needs %d > %d'
+                                    % (tag, line, need, w.winfo_width()))
+            if (w.winfo_x() + w.winfo_width()
+                    > w.master.winfo_width() + 2):
+                problems.append('%s: %r overflows row' % (tag, text[:12]))
+        if isinstance(w, tk.Canvas):
+            cw = w.winfo_width()
+            chh = w.winfo_height()
+            for item in w.find_all():
+                bbox = w.bbox(item)
+                if not bbox:
+                    continue
+                if (bbox[0] < -1 or bbox[1] < -1
+                        or bbox[2] > cw + 1 or bbox[3] > chh + 1):
+                    problems.append('%s: canvas item %s bbox %s > %dx%d'
+                                    % (tag, w.type(item), bbox, cw, chh))
+    if root.winfo_reqwidth() > 1000 + 4:
+        problems.append('%s: window reqwidth %d > 1000'
+                        % (tag, root.winfo_reqwidth()))
+
+
+# 1) 战斗屏：12 张手牌 + 3 敌人 + 长日志
+combat = test_run.force_node(game, test_run.find_node(game, 'combat'))
+game.active.enemies = [core.EnemyInstance(content.ENEMIES[e], 1)
+                       for e in ('goblin', 'wolf', 'slime')]
+for e in game.active.enemies:
+    e.intent = '攻击 5×2'
+game.active.hand = ([('strike', False)] * 4 + [('defend', True)] * 4
+                    + [('heavy', False)] * 2 + [('cleave', True)] * 2)
+app._log(['这是一条足够长的战斗日志用来验证换行与宽度限制是否有效。'] * 3)
+app.show_combat()
+check('combat')
+
+# 2) 火堆屏 + 锻造展开
+game.node_done = True
+game.pending = None
+game.active = None
+test_run.force_node(game, test_run.find_node(game, 'campfire'))
+app._camp_forge_mode = True
+app.show_campfire()
+check('campfire')
+
+# 3) 商店屏 + 删牌展开
+game.node_done = True
+game._camp_forge_mode = False
+test_run.force_node(game, test_run.find_node(game, 'shop'))
+game.hero.gold = 999
+app.show_shop()
+game.shop.slots[0].content_id  # 渲染过即可
+app._shop_remove_mode = True
+app.show_shop()
+check('shop')
+
+# 4) 地图屏全量按钮
+game._shop_remove_mode = False
+game.node_done = True
+app.show_map()
+check('map')
+
+root.destroy()
+if problems:
+    print('\n'.join(problems))
+    sys.exit(1)
+'''
+
+
+class LayoutRegressionTests(unittest.TestCase):
+
+    def test_layout_fits_with_real_dpi_awareness(self):
+        if not TK_OK:
+            self.skipTest('无可用 Tk 显示环境')
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, '-c', LAYOUT_SCRIPT],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', timeout=60, cwd=os.path.dirname(
+                os.path.abspath(__file__)))
+        self.assertEqual(result.returncode, 0,
+                         result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
