@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Tkinter 鼠标界面：一次一屏，点按钮完成全部操作。不含任何游戏规则。"""
+import textwrap
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -152,6 +153,7 @@ class WarriorGUI(object):
         self._finished_notified = False
         self._pending_card = None
         self._pending_potion = None
+        self._combat_log = []
         self.show_map()
 
     # ---------- 地图屏 ----------
@@ -207,8 +209,185 @@ class WarriorGUI(object):
         ttk.Label(self.container, text=text, wraplength=900).pack(
             expand=True)
 
+    # ---------- 战斗屏 ----------
+
     def show_combat(self):
-        self._placeholder('战斗屏（待实装）')
+        g = self.game
+        combat = g.active
+        self._clear()
+        self._update_status()
+        self._pending_card = None
+        self._pending_potion = None
+        outer = ttk.Frame(self.container)
+        outer.pack(fill='both', expand=True, padx=8, pady=4)
+        if getattr(self, '_logged_combat', None) is not combat:
+            self._logged_combat = combat
+            self._combat_log = []
+            self._log(['--- 遭遇 %s！---' % '、'.join(
+                e.name for e in combat.enemies)])
+        snap = combat.snapshot()
+        ttk.Label(outer, text='生命 %d/%d  格挡 %d  能量 %d  第 %d 回合'
+                  % (snap['hp'], snap['max_hp'], snap['block'],
+                     snap['energy'], snap['turn'])).pack(anchor='w')
+        ef = ttk.Frame(outer)
+        ef.pack(fill='x', pady=4)
+        self.enemy_buttons = []
+        for i, e in enumerate(snap['enemies']):
+            if not e['alive']:
+                continue
+            extras = []
+            if e['block']:
+                extras.append('格挡%d' % e['block'])
+            if e['vulnerable']:
+                extras.append('易伤%d' % e['vulnerable'])
+            if e['poison']:
+                extras.append('毒%d' % e['poison'])
+            f = ttk.Frame(ef)
+            f.pack(side='left', padx=4)
+            btn = ttk.Button(
+                f, text='%s\n%d/%d 意图:%s%s'
+                       % (e['name'], e['hp'], e['max_hp'],
+                          e['intent'] or '…',
+                          (' ' + '/'.join(extras)) if extras else ''),
+                command=lambda idx=i: self._on_enemy(idx))
+            btn.pack()
+            bar = tk.Canvas(f, width=110, height=10, highlightthickness=0)
+            bar.pack(pady=(2, 0))
+            self._draw_hp_bar(bar, e['hp'], e['max_hp'])
+            self.enemy_buttons.append(btn)
+        hf = ttk.Frame(outer)
+        hf.pack(fill='x', pady=6)
+        self.hand_buttons = []
+        for card in snap['hand']:
+            star = '+' if card['upgraded'] else ''
+            body = '\n'.join(textwrap.wrap(card['text'], 12))
+            btn = ttk.Button(
+                hf,
+                text='%s%s（%d费）\n%s' % (card['name'], star, card['cost'],
+                                          body),
+                command=lambda idx=card['idx']: self._on_card(idx))
+            if not card['playable']:
+                btn.state(['disabled'])
+            self.hand_buttons.append(btn)
+        _flow_layout(hf, self.hand_buttons, self.WINDOW_W - 80)
+        af = ttk.Frame(outer)
+        af.pack(fill='x', pady=2)
+        self.end_btn = ttk.Button(af, text='结束回合',
+                                  command=self._on_end_turn)
+        self.end_btn.pack(side='left', padx=4)
+        self.potion_buttons = []
+        for slot, pid in enumerate(snap['potions']):
+            pb = ttk.Button(af, text='药水·%s' % content.POTIONS[pid].name,
+                            command=lambda s=slot: self._on_potion(s))
+            pb.pack(side='left', padx=2)
+            self.potion_buttons.append(pb)
+        ttk.Button(af, text='详情', command=self._show_details).pack(
+            side='left', padx=4)
+        self.cancel_btn = ttk.Button(af, text='取消',
+                                     command=self._cancel_targeting)
+        self.log_text = ScrolledText(outer, height=7, wrap='word')
+        self.log_text.pack(fill='x', pady=4)
+        self._render_log()
+
+    def _draw_hp_bar(self, canvas, hp, max_hp):
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, 110, 10, fill='#661a1a',
+                                outline='')
+        if hp > 0:
+            w = int(110 * hp / max(1, max_hp))
+            canvas.create_rectangle(0, 0, w, 10, fill='#2e8b57',
+                                    outline='')
+
+    # ---------- 战斗日志 ----------
+
+    def _render_log(self):
+        self.log_text.configure(state='normal')
+        self.log_text.delete('1.0', 'end')
+        for line in self._combat_log[-120:]:
+            self.log_text.insert('end', line + '\n')
+        self.log_text.see('end')
+        self.log_text.configure(state='disabled')
+
+    def _log(self, lines):
+        if not hasattr(self, '_combat_log'):
+            self._combat_log = []
+        self._combat_log.extend(lines)
+        if hasattr(self, 'log_text'):
+            self._render_log()
+
+    # ---------- 战斗动作 ----------
+
+    def _on_card(self, idx):
+        combat = self.game.active
+        if combat is None or combat.status != 'playing':
+            return
+        snap = combat.snapshot()
+        if not (0 <= idx < len(snap['hand'])) \
+                or not snap['hand'][idx]['playable']:
+            return
+        lines = combat.play_card(idx, None)
+        self._after_action(lines)
+
+    def _on_enemy(self, idx):
+        return
+
+    def _on_potion(self, slot):
+        combat = self.game.active
+        if combat is None or combat.status != 'playing':
+            return
+        lines = combat.use_potion(slot, None)
+        self._after_action(lines)
+
+    def _on_end_turn(self):
+        combat = self.game.active
+        if combat is None or combat.status != 'playing':
+            return
+        lines = combat.end_turn()
+        self._after_action(lines)
+
+    def _cancel_targeting(self):
+        self._pending_card = None
+        self._pending_potion = None
+        if self.game.active is not None:
+            self.show_combat()
+
+    def _after_action(self, lines):
+        self._log(lines)
+        combat = self.game.active
+        if combat.status != 'playing':
+            if combat.status == 'win':
+                self._log(['*** 战斗胜利！***'])
+            else:
+                self._log(['你倒下了……'])
+            self.game.combat_finished()
+            self.show_screen()
+        else:
+            self.show_combat()
+
+    def _show_details(self):
+        if self.game is None:
+            return
+        win = tk.Toplevel(self.root)
+        win.title('行囊')
+        text = ScrolledText(win, width=50, height=14, wrap='word')
+        hero = self.game.hero
+        text.insert('end', '武器：%s\n' % content.WEAPONS[hero.weapon].name)
+        text.insert('end', '防具：%s\n' % (
+            content.ARMORS[hero.armor].name if hero.armor else '无'))
+        for rid in hero.relics:
+            text.insert('end', '遗物：%s —— %s\n'
+                        % (content.RELICS[rid].name,
+                           content.RELICS[rid].text))
+        counts = {}
+        for cid, up in hero.deck:
+            key = (cid, up)
+            counts[key] = counts.get(key, 0) + 1
+        text.insert('end', '卡组 %d 张：%s\n' % (
+            len(hero.deck), '、'.join(
+                '%s%s×%d' % (content.CARDS[cid].name, '+' if up else '', n)
+                for (cid, up), n in sorted(counts.items()))))
+        text.configure(state='disabled')
+        text.pack(fill='both', expand=True)
 
     def show_rewards(self):
         self._placeholder('奖励屏（待实装）')

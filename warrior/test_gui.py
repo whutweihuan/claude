@@ -5,6 +5,7 @@ import unittest
 
 import tkinter as tk
 
+import content
 import core
 
 
@@ -86,6 +87,71 @@ class SkeletonTests(GuiTestCase):
         st = main_mod.apply_result_to_records({'outcome': 'aborted'}, path)
         self.assertEqual(st, 'skipped')
         self.assertFalse(os.path.exists(path))
+
+
+def to_combat(app, enemies=None, hand=None, energy=None):
+    g = app.game
+    g.go(g.map.entry_ids[0])
+    g.enter()
+    if enemies is not None:
+        g.active.enemies = [core.EnemyInstance(content.ENEMIES[e], 1)
+                            for e in enemies]
+    if hand is not None:
+        g.active.hand = [(c, False) for c in hand]
+    if energy is not None:
+        g.active.energy = energy
+    app.show_screen()
+    return g.active
+
+
+class CombatScreenTests(GuiTestCase):
+
+    def test_combat_widgets_render(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin'], energy=0)
+        self.assertEqual(len(app.hand_buttons), len(combat.hand))
+        for btn in app.hand_buttons:
+            self.assertTrue(btn.instate(('disabled',)))
+        text = ' '.join(b.cget('text') for b in app.enemy_buttons)
+        self.assertIn('意图', text)
+        log = app.log_text.get('1.0', tk.END)
+        self.assertIn('遭遇', log)
+
+    def test_click_card_plays(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin'],
+                           hand=['strike', 'defend', 'defend', 'defend',
+                                 'defend'])
+        hp0 = combat.enemies[0].hp
+        app.hand_buttons[0].invoke()
+        self.assertEqual(combat.enemies[0].hp, hp0 - 6)
+        self.assertIn('打击', app.log_text.get('1.0', tk.END))
+
+    def test_end_turn_button(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin'])
+        turn0 = combat.turn
+        app.end_btn.invoke()
+        self.assertEqual(combat.turn, turn0 + 1)
+
+    def test_click_after_combat_over_ignored(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin'],
+                           hand=['strike', 'strike', 'strike'])
+        for e in combat.enemies:
+            e.hp = 0
+        combat.status = 'win'
+        app.hand_buttons[0].invoke()  # 不得抛异常
+        self.assertEqual(combat.enemies[0].hp, 0)
+
+    def test_win_click_lands_on_rewards(self):
+        app = make_app(self.root, seed=7)
+        combat = to_combat(app, enemies=['goblin'], hand=['strike'] * 3)
+        combat.enemies[0].hp = 3
+        app.show_combat()
+        app.hand_buttons[0].invoke()
+        self.assertEqual(combat.status, 'win')
+        self.assertIsNotNone(app.game.pending)
 
 
 if __name__ == '__main__':
