@@ -241,6 +241,7 @@ class NodeScreensTests(GuiTestCase):
         slot = next(i for i, (c, u) in enumerate(app.game.hero.deck)
                     if c == 'strike')
         app.forge_card_buttons[slot].invoke()
+        app.confirm_btn.invoke()
         self.assertEqual(app.game.hero.deck[slot], ('strike', True))
         self.assertTrue(app.game.node_done)
 
@@ -652,6 +653,47 @@ def all_texts(widget):
             rec(c)
     rec(widget)
     return out
+
+
+class ForgeConfirmTests(GuiTestCase):
+
+    def campfire_at_strike(self):
+        app = make_app(self.root, seed=7)
+        force_node(app.game, find_node(app.game, 'campfire'))
+        app.show_screen()
+        app.forge_btn.invoke()
+        slot = next(i for i, (cd, up) in enumerate(app.game.hero.deck)
+                    if cd == 'strike')
+        return app, slot
+
+    def test_forge_needs_confirmation(self):
+        app, slot = self.campfire_at_strike()
+        app.forge_card_buttons[slot].invoke()
+        # 选中后：未消费火堆、卡组未变、出现确认区
+        self.assertFalse(app.game.node_done)
+        self.assertEqual(app.game.hero.deck[slot], ('strike', False))
+        texts = all_texts(app.container)
+        self.assertTrue(any('确认锻造' in t for t in texts), texts)
+        self.assertTrue(any('造成 9 点伤害' in t for t in texts))
+        app.confirm_btn.invoke()
+        self.assertEqual(app.game.hero.deck[slot], ('strike', True))
+        self.assertTrue(app.game.node_done)
+
+    def test_forge_cancel(self):
+        app, slot = self.campfire_at_strike()
+        app.forge_card_buttons[slot].invoke()
+        app.cancel_forge_btn.invoke()
+        self.assertFalse(app.game.node_done)
+        self.assertEqual(app.game.hero.deck[slot], ('strike', False))
+        # 取消后回到可再选的锻造列表或火堆主屏，不崩溃
+        app.show_screen()
+
+    def test_combat_shows_attack_bonus(self):
+        app = make_app(self.root, seed=7)
+        app.game.hero.weapon_sharpen = 1
+        to_combat(app, enemies=['goblin'])
+        self.assertTrue(any('攻击加值 +1' in t
+                            for t in all_texts(app.container)))
 
 
 class FeedbackTests(GuiTestCase):
