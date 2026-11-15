@@ -8,12 +8,12 @@ export { plotPrice }
 
 /** 金额记账统一原则（§4.5）：任何种植（含未来的自动补种）一律扣 seedCost，任何收获一律加 yieldCoins。 */
 
-interface PlotRef {
+export interface PlotRef {
   mapId: string
   n: number
 }
 
-function parsePlotId(id: string): PlotRef | null {
+export function parsePlotId(id: string): PlotRef | null {
   const i = id.lastIndexOf(':')
   if (i <= 0) return null
   const n = Number(id.slice(i + 1))
@@ -39,7 +39,8 @@ function speedLevel(s: RunState, mapId: string): number {
   return s.upgrades[upgradeKey('speed', mapId)] ?? 0
 }
 
-function cloneState(s: RunState): RunState {
+/** @internal 供 offline.ts 复用同一状态拷贝语义 */
+export function cloneState(s: RunState): RunState {
   const plots: RunState['plots'] = {}
   for (const [k, p] of Object.entries(s.plots)) plots[k] = { ...p }
   return {
