@@ -1,10 +1,19 @@
 import { buildIndex } from '../game/content'
 import { PlotCell } from './PlotCell'
+import type { PlotState } from '../game/types'
 
 const CONTENT = buildIndex()
 
 /** 当前图的地块网格：2 行自适应列（§7.1） */
-export function PlotGrid({ mapId, now }: { mapId: string; now: number }) {
+export function PlotGrid({
+  mapId,
+  now,
+  onPlotClick
+}: {
+  mapId: string
+  now: number
+  onPlotClick?: (plot: PlotState) => void
+}) {
   const mapDef = CONTENT.mapById[mapId]
   if (!mapDef) return null
   const cols = mapDef.plotCount >= 16 ? 6 : 4
@@ -14,7 +23,7 @@ export function PlotGrid({ mapId, now }: { mapId: string; now: number }) {
       style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
     >
       {Array.from({ length: mapDef.plotCount }, (_, n) => (
-        <PlotCell key={`${mapId}:${n}`} mapId={mapId} n={n} now={now} />
+        <PlotCell key={`${mapId}:${n}`} mapId={mapId} n={n} now={now} onPlotClick={onPlotClick} />
       ))}
     </div>
   )

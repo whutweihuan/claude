@@ -2,16 +2,15 @@ import { getStore } from '../store/gameStore'
 import { buildIndex, plotKey, plotPrice } from '../game/content'
 import { isMature, progressOf, stageOf } from '../game/systems/growth'
 import { formatCoins } from '../game/systems/format'
+import { harvestGain } from '../game/systems/engine'
 import type { PlotState } from '../game/types'
 import { PlantSprite } from './PlantSprite'
+import { spawnFloat } from './floatText'
 
 const CONTENT = buildIndex()
 
-export function firstPlayableCrop(mapId: string): string | null {
-  const st = getStore().useGame.getState()
-  const crops = CONTENT.cropsByMap[mapId] ?? []
-  const preset = crops.find((c) => c.id && st.game.cropsUnlocked[c.id])
-  return preset?.id ?? null
+function spawnFloatAt(evt: React.MouseEvent, text: string, tone: 'gain' | 'cost'): void {
+  spawnFloat(evt.clientX, evt.clientY - 18, text, tone)
 }
 
 export function PlotCell({
@@ -42,20 +41,16 @@ export function PlotCell({
 
   const priceLabel = plot.unlocked ? '' : formatCoins(price)
 
-  function handleClick() {
+  function handleClick(evt: React.MouseEvent) {
     const { dispatch } = getStore().useGame.getState()
     if (!plot) return
-    if (onPlotClick) {
-      onPlotClick(plot)
-      return
-    }
     if (!plot.unlocked) {
-      dispatch({ t: 'buyPlot', plotId: id })
+      if (dispatch({ t: 'buyPlot', plotId: id })) spawnFloatAt(evt, `-${formatCoins(price)}`, 'cost')
     } else if (mature) {
-      dispatch({ t: 'harvest', plotId: id })
-    } else if (!plot.cropId) {
-      const cropId = plot.presetCropId ?? firstPlayableCrop(mapId)
-      if (cropId) dispatch({ t: 'plant', plotId: id, cropId })
+      const gain = crop ? harvestGain(getStore().useGame.getState().game, CONTENT, mapId, crop) : null
+      if (dispatch({ t: 'harvest', plotId: id }) && gain) spawnFloatAt(evt, `+${formatCoins(gain)}`, 'gain')
+    } else {
+      onPlotClick?.(plot)
     }
   }
 

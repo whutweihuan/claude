@@ -41,3 +41,34 @@ body {
 .plot-glow {
   animation: glowpulse 2.4s ease-in-out infinite;
 }
+
+@keyframes floatUp {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -46px);
+  }
+}
+
+.float-plus {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  font-weight: 700;
+  font-size: 15px;
+  animation: floatUp 0.9s ease-out forwards;
+  text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
+}
+
+.float-tone-gain {
+  color: #fcd34d;
+}
+.float-tone-cost {
+  color: #fda4af;
+}
+.float-tone-info {
+  color: #a7f3d0;
+}
