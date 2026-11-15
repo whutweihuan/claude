@@ -6,6 +6,7 @@ import { harvestGain } from '../game/systems/engine'
 import { CropPicker } from './CropPicker'
 import { PlantSprite } from './PlantSprite'
 import { spawnFloat } from './floatText'
+import { playSound } from './sound'
 
 const CONTENT = buildIndex()
 
@@ -50,7 +51,7 @@ export function PlotDetail({ plotId, now }: { plotId: string; now: number }) {
           if (crop) {
             if (dispatch({ t: 'swapPreset', plotId, cropId })) spawnFloat(window.innerWidth / 2, 120, '已更换预设', 'info')
           } else {
-            dispatch({ t: 'plant', plotId, cropId })
+            if (dispatch({ t: 'plant', plotId, cropId })) playSound('buy')
           }
         }}
       />

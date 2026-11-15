@@ -7,6 +7,7 @@ import { harvestGain } from '../game/systems/engine'
 import type { PlotState } from '../game/types'
 import { PlantSprite } from './PlantSprite'
 import { spawnFloat } from './floatText'
+import { playSound } from './sound'
 
 const CONTENT = buildIndex()
 
@@ -46,10 +47,16 @@ export function PlotCell({
     const { dispatch } = getStore().useGame.getState()
     if (!plot) return
     if (!plot.unlocked) {
-      if (dispatch({ t: 'buyPlot', plotId: id })) spawnFloatAt(evt, `-${formatCoins(price)}`, 'cost')
+      if (dispatch({ t: 'buyPlot', plotId: id })) {
+        spawnFloatAt(evt, `-${formatCoins(price)}`, 'cost')
+        playSound('buy')
+      }
     } else if (mature) {
       const gain = crop ? harvestGain(getStore().useGame.getState().game, CONTENT, mapId, crop) : null
-      if (dispatch({ t: 'harvest', plotId: id }) && gain) spawnFloatAt(evt, `+${formatCoins(gain)}`, 'gain')
+      if (dispatch({ t: 'harvest', plotId: id }) && gain) {
+        spawnFloatAt(evt, `+${formatCoins(gain)}`, 'gain')
+        playSound('harvest')
+      }
     } else {
       onPlotClick?.(plot)
     }

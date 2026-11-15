@@ -5,6 +5,7 @@ import { UPGRADE_DEFS } from '../game/content/upgrades'
 import { canMigrate } from '../game/systems/engine'
 import { formatCoins, formatPercent } from '../game/systems/format'
 import { PlotDetail } from './PlotDetail'
+import { playSound } from './sound'
 import type { UpgradeDef } from '../game/types'
 
 const CONTENT = buildIndex()
@@ -32,7 +33,9 @@ function UpgradeRow({ def, mapId }: { def: UpgradeDef; mapId: string }) {
     <button
       type="button"
       disabled={!affordable}
-      onClick={() => useGame.getState().dispatch({ t: 'buyUpgrade', defId: def.id, scope })}
+      onClick={() => {
+          if (useGame.getState().dispatch({ t: 'buyUpgrade', defId: def.id, scope })) playSound('buy')
+        }}
       className={[
         'flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-left text-xs',
         maxed
@@ -88,7 +91,9 @@ export function ShopPanel({
                   key={c.id}
                   type="button"
                   disabled={!afford}
-                  onClick={() => useGame.getState().dispatch({ t: 'unlockCrop', cropId: c.id })}
+                  onClick={() => {
+                  if (useGame.getState().dispatch({ t: 'unlockCrop', cropId: c.id })) playSound('unlock')
+                }}
                   className={[
                     'flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-xs',
                     afford ? 'border-white/15 hover:border-emerald-300/50' : 'border-white/5 text-white/30'
@@ -117,7 +122,10 @@ export function ShopPanel({
           type="button"
           disabled={!gate?.ok}
           onClick={() => {
-            if (gate?.ok && useGame.getState().dispatch({ t: 'migrate', mapId: next.id })) onMigrated(next.id)
+            if (gate?.ok && useGame.getState().dispatch({ t: 'migrate', mapId: next.id })) {
+              playSound('migrate')
+              onMigrated(next.id)
+            }
           }}
           className={[
             'rounded-xl border px-3 py-2.5 text-sm font-medium',
