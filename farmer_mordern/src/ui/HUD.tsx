@@ -57,7 +57,7 @@ export function HUD({ onOpenSettings }: { onOpenSettings: () => void }) {
           <div className="text-xl text-amber-200">
             <AnimatedCoins value={coins} />
           </div>
-          <div className="text-[11px] text-white/40">{rate}/秒 · 离线报告最长 {formatDuration(8 * 3600_000)} 起</div>
+          <div className="text-[11px] text-white/40">{rate}/秒 · 离线结算上限 {formatDuration(8 * 3600_000)}（棱镜灯可延长）</div>
         </div>
         <button
           type="button"
