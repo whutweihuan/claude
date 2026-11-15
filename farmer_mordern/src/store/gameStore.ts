@@ -67,7 +67,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
   let readOnly = false
   let loadError: string | null = null
   let writes = 0
-  let hydrated: RunState | null = null
+  let hydrated: RunState | null = null as RunState | null
   let lastWrite = Number.NEGATIVE_INFINITY
   let pending: string | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -125,7 +125,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
     version: 0,
     storage: createJSONStorage(() => persistStorage),
     partialize: (s) => ({ game: toSaveData(s.game, clock()) }),
-    merge: (persisted, current) => ({ ...current, game: hydrated ?? current.game })
+    merge: (_persisted, current) => ({ ...current, game: hydrated ?? current.game })
   }
 
   const useGame = create<GameStore>()(
