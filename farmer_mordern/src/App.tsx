@@ -4,6 +4,8 @@ import { PlotGrid } from './ui/PlotGrid'
 import { HUD } from './ui/HUD'
 import { MapRail } from './ui/MapRail'
 import { ShopPanel } from './ui/ShopPanel'
+import { OfflineReportModal } from './ui/OfflineReport'
+import { SettingsPanel } from './ui/SettingsPanel'
 import type { PlotState } from './game/types'
 
 export default function App() {
@@ -13,6 +15,7 @@ export default function App() {
   const loadError = useGame((s) => s.ui.loadError)
   const [mapId, setMapId] = useState('garden')
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   useEffect(() => startHeartbeat(getStore()), [])
 
   const unlockedIds = Object.entries(maps)
@@ -26,7 +29,7 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
-      <HUD onOpenSettings={() => undefined} />
+      <HUD onOpenSettings={() => setSettingsOpen(true)} />
       {loadError && (
         <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-100">
           {loadError}
@@ -50,6 +53,8 @@ export default function App() {
           onMigrated={(next) => setMapId(next)}
         />
       </div>
+      <OfflineReportModal />
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   )
 }

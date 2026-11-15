@@ -19,6 +19,7 @@ export interface UiState {
   loadError: string | null
   nowTick: number
   muted: boolean
+  volume: number
 }
 
 export interface GameStore {
@@ -28,6 +29,7 @@ export interface GameStore {
   tick(now: number): void
   dismissReport(): void
   setMuted(m: boolean): void
+  setVolume(v: number): void
   exportSave(): string
   importSave(text: string): { ok: boolean; reason?: string }
   newGame(): void
@@ -141,7 +143,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
       }
       return {
         game: initialState(CONTENT, clock()),
-        ui: { report: null, loadError: null, nowTick: clock(), muted: true },
+        ui: { report: null, loadError: null, nowTick: clock(), muted: true, volume: 0.8 },
         dispatch: (ev) => {
           const r = applyEvent(get().game, ev, CONTENT, clock())
           if (r.ok) set({ game: r.state })
@@ -153,6 +155,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
         },
         dismissReport: () => set({ ui: { ...get().ui, report: null } }),
         setMuted: (m) => set({ ui: { ...get().ui, muted: m } }),
+        setVolume: (v) => set({ ui: { ...get().ui, volume: Math.min(1, Math.max(0, v)) } }),
         exportSave: () => exportJson(get().game),
         importSave: (text) => {
           const outcome = parseSave(text, CONTENT)
@@ -188,7 +191,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
             writes = 0
             set({
               game: initialState(CONTENT, clock()),
-              ui: { report: null, loadError: null, nowTick: clock(), muted: true }
+              ui: { report: null, loadError: null, nowTick: clock(), muted: true, volume: 0.8 }
             })
           })
         }
@@ -210,6 +213,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
 
   return {
     useGame,
+    readRaw: () => backend.getItem(SAVE_KEY),
     flags: {
       get readOnly() {
         return readOnly
