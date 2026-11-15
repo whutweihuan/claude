@@ -10,6 +10,7 @@ body,
 
 body {
   margin: 0;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   background: radial-gradient(1200px 800px at 70% -10%, #10231f 0%, #060a12 55%, #04050a 100%) fixed;
 }
 

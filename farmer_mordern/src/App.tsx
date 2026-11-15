@@ -6,7 +6,11 @@ import { MapRail } from './ui/MapRail'
 import { ShopPanel } from './ui/ShopPanel'
 import { OfflineReportModal } from './ui/OfflineReport'
 import { SettingsPanel } from './ui/SettingsPanel'
+import { BackgroundCanvas } from './ui/BackgroundCanvas'
+import { buildIndex } from './game/content'
 import type { PlotState } from './game/types'
+
+const CONTENT = buildIndex()
 
 export default function App() {
   const { useGame } = getStore()
@@ -27,8 +31,11 @@ export default function App() {
     setSelectedPlot(plot.id)
   }
 
+  const hue = CONTENT.mapById[activeMap]?.hue ?? 95
+
   return (
     <div className="flex h-full flex-col gap-3 p-4">
+      <BackgroundCanvas hue={hue} />
       <HUD onOpenSettings={() => setSettingsOpen(true)} />
       {loadError && (
         <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-100">

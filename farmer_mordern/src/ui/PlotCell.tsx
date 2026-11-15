@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion'
 import { getStore } from '../store/gameStore'
 import { buildIndex, plotKey, plotPrice } from '../game/content'
 import { isMature, progressOf, stageOf } from '../game/systems/growth'
@@ -55,8 +56,9 @@ export function PlotCell({
   }
 
   return (
-    <button
+    <motion.button
       type="button"
+      whileTap={{ scale: 0.93 }}
       onClick={handleClick}
       className={[
         'relative aspect-square w-full rounded-xl border text-center transition',
@@ -92,6 +94,6 @@ export function PlotCell({
       {plot.unlocked && !crop && !mature && presetName && (
         <div className="absolute inset-x-0 top-1 truncate px-1 text-[10px] text-white/45">{presetName}</div>
       )}
-    </button>
+    </motion.button>
   )
 }
