@@ -12,3 +12,32 @@ body {
   margin: 0;
   background: radial-gradient(1200px 800px at 70% -10%, #10231f 0%, #060a12 55%, #04050a 100%) fixed;
 }
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(1.025);
+  }
+}
+
+.animate-breathe {
+  animation: breathe 2.4s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+@keyframes glowpulse {
+  0%,
+  100% {
+    box-shadow: 0 0 6px 1px rgb(52 211 153 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 16px 4px rgb(52 211 153 / 0.55);
+  }
+}
+
+.plot-glow {
+  animation: glowpulse 2.4s ease-in-out infinite;
+}
