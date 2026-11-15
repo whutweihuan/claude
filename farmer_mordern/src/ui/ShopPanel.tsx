@@ -60,12 +60,16 @@ export function ShopPanel({
   mapId,
   selectedPlotId,
   now,
-  onMigrated
+  onMigrated,
+  mobileOpen,
+  onCloseMobile
 }: {
   mapId: string
   selectedPlotId: string | null
   now: number
   onMigrated: (nextMapId: string) => void
+  mobileOpen: boolean
+  onCloseMobile: () => void
 }) {
   const { useGame } = getStore()
   const game = useGame((s) => s.game)
@@ -76,7 +80,21 @@ export function ShopPanel({
   const crops = CONTENT.cropsByMap[mapId] ?? []
 
   return (
-    <aside className="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+    <aside
+      className={[
+        'w-full flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-slate-900/95 p-3 shadow-2xl backdrop-blur',
+        'fixed inset-x-2 bottom-2 z-40 max-h-[62vh]',
+        'lg:static lg:z-auto lg:max-h-none lg:w-80 lg:shrink-0 lg:rounded-none lg:border-none lg:bg-transparent lg:p-0 lg:pr-1 lg:shadow-none',
+        mobileOpen ? 'flex' : 'hidden lg:flex'
+      ].join(' ')}
+    >
+      <button
+        type="button"
+        onClick={onCloseMobile}
+        className="self-end rounded-lg border border-white/15 px-2 py-0.5 text-xs text-white/60 lg:hidden"
+      >
+        收起 ✕
+      </button>
       {selectedPlotId && <PlotDetail plotId={selectedPlotId} now={now} />}
       <section className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
         <div className="mb-2 text-xs font-semibold tracking-wider text-white/60">作物解锁 · {mapDef.name}</div>

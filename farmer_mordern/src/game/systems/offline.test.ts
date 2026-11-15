@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import Decimal from 'break_infinity.js'
 import { autoTick, offlineCapMs, settleOffline } from './offline'
+import { applyEvent } from './engine'
 import { buildIndex, plotKey } from '../content'
 import { effectiveGrowMs } from './growth'
 import { initialState } from './engine'
@@ -165,5 +166,20 @@ describe('在线/离线一致性（§9 核心保障）', () => {
     // 报告合计 = 总收益增量（比 coins 差更抗大数精度抹平）
     expect(off.report.gained.toString()).toBe(off.state.totalEarned.minus(s0.totalEarned).toString())
     expect(off.report.perMap['garden']!.cycles).toBeGreaterThan(500)
+  })
+})
+
+describe('审查 I6：停摆后补钱恢复', () => {
+  it('补钱手动补种 → 自动化续轮', () => {
+    const s = midState(new Decimal(5), {}, { 0: { cropId: 'radish', preset: 'bokchoy' } })
+    s.upgrades['autoHarvest:garden'] = 1
+    s.upgrades['autoReplant:garden'] = 1
+    const stuck = settleOffline(s, idx, 0, HOUR).state
+    expect(stuck.plots[plotKey('garden', 0)]?.cropId).toBeNull()
+    const topped: RunState = { ...stuck, coins: new Decimal(1000) }
+    const planted = applyEvent(topped, { t: 'plant', plotId: plotKey('garden', 0), cropId: 'bokchoy' }, idx, HOUR)
+    expect(planted.ok).toBe(true)
+    const r2 = settleOffline(planted.state, idx, HOUR, 2 * HOUR)
+    expect((r2.report.perMap['garden']?.cycles ?? 0)).toBeGreaterThan(100)
   })
 })

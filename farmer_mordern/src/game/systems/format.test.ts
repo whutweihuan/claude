@@ -45,3 +45,14 @@ describe('formatPercent', () => {
     expect(formatPercent(1)).toBe('100%')
   })
 })
+
+describe('formatCoins 小数与负数防御（审查 I1）', () => {
+  it('(0,1) 区间不乱码', () => {
+    expect(formatCoins(new Decimal('0.5'))).toBe('0.5')
+    expect(formatCoins(new Decimal('0.25'))).toBe('0.25')
+    expect(formatCoins(new Decimal('1e-6'))).toBe('0')
+  })
+  it('负数带符号不产生 undefined', () => {
+    expect(formatCoins(new Decimal('-3'))).toBe('-3')
+  })
+})

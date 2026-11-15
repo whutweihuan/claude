@@ -18,7 +18,7 @@ export function MapRail({ active, onPick }: { active: string; onPick: (mapId: st
   const maps = useGame((s) => s.game.maps)
   const game = useGame((s) => s.game)
   return (
-    <nav className="flex w-36 shrink-0 flex-col gap-2">
+    <nav className="flex w-full shrink-0 flex-row gap-2 overflow-x-auto pb-1 lg:w-36 lg:flex-col lg:overflow-visible lg:pb-0">
       {CONTENT.maps.map((m) => {
         const unlocked = maps[m.id]?.unlocked ?? false
         const prev = CONTENT.maps[m.order - 2]
@@ -36,7 +36,7 @@ export function MapRail({ active, onPick }: { active: string; onPick: (mapId: st
             title={tip}
             onClick={() => unlocked && onPick(m.id)}
             className={[
-              'rounded-xl border px-3 py-2 text-left text-sm transition',
+              'shrink-0 rounded-xl border px-3 py-2 text-left text-sm transition',
               unlocked
                 ? m.id === active
                   ? 'bg-emerald-400/10 text-emerald-50'

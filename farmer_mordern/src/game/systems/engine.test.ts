@@ -34,14 +34,14 @@ describe('initialState', () => {
 })
 
 describe('plant / harvest', () => {
-  it('种植扣 seedCost 并写入 growMs 快照与预设', () => {
-    const s = ok(fresh(), { t: 'plant', plotId: plotKey('garden', 0), cropId: 'radish' }, 7)
-    expect(s.coins.eq(14)).toBe(true)
+  it('种植扣 seedCost 并写入 growMs 快照与预设（首作物免费见 C1 组）', () => {
+    const s = ok(fresh(new Decimal(100)), { t: 'plant', plotId: plotKey('garden', 0), cropId: 'bokchoy' }, 7)
+    expect(s.coins.eq(70)).toBe(true)
     const p = s.plots[plotKey('garden', 0)]
-    expect(p?.cropId).toBe('radish')
-    expect(p?.presetCropId).toBe('radish')
+    expect(p?.cropId).toBe('bokchoy')
+    expect(p?.presetCropId).toBe('bokchoy')
     expect(p?.plantedAt).toBe(7)
-    expect(p?.growMs).toBe(5000)
+    expect(p?.growMs).toBe(15000)
   })
   it('余额不足 → noCoins 且 state 引用不变', () => {
     const s = fresh()
@@ -67,7 +67,7 @@ describe('plant / harvest', () => {
     expect(early.reason).toBe('invalid')
     expect(early.state).toBe(s0)
     const s1 = ok(s0, { t: 'harvest', plotId: plotKey('garden', 0) }, 5000)
-    expect(s1.coins.eq(14 + 12)).toBe(true)
+    expect(s1.coins.eq(15 + 12)).toBe(true)
     expect(s1.totalEarned.eq(12)).toBe(true)
     const p = s1.plots[plotKey('garden', 0)]
     expect(p?.cropId).toBeNull()
@@ -221,5 +221,19 @@ describe('migrate / canMigrate', () => {
     expect(canMigrate(fresh(new Decimal(1e9)), idx, 'greenhouse').missing).toBe('plots')
     expect(canMigrate(gardenComplete(new Decimal(100)), idx, 'greenhouse').missing).toBe('coins')
     expect(canMigrate(gardenComplete(new Decimal('1e7')), idx, 'greenhouse').ok).toBe(true)
+  })
+})
+
+describe('审查 C1：零余额不死局', () => {
+  it('coins=0 且全空地时，首作物仍可种（免费种子）', () => {
+    const s: RunState = { ...initialState(idx, 0), coins: new Decimal(0) }
+    const r = applyEvent(s, { t: 'plant', plotId: plotKey('garden', 0), cropId: 'radish' }, idx, 0)
+    expect(r.ok).toBe(true)
+    expect(r.state.coins.eq(0)).toBe(true)
+    expect(r.state.plots[plotKey('garden', 0)]?.cropId).toBe('radish')
+  })
+  it('分数余额 0.5 同样可种', () => {
+    const s: RunState = { ...initialState(idx, 0), coins: new Decimal('0.5') }
+    expect(applyEvent(s, { t: 'plant', plotId: plotKey('garden', 0), cropId: 'radish' }, idx, 0).ok).toBe(true)
   })
 })

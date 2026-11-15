@@ -5,7 +5,8 @@ const UNITS = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc']
 /** 金额统一显示入口（§8.3）：<1000 取整；K..Dc 阶梯；≥1e36 科学计数 */
 export function formatCoins(d: Decimal): string {
   if (d.eq(0)) return '0'
-  const tier = Math.floor(d.log10() / 3)
+  if (d.lt(0)) return `-${formatCoins(d.abs())}`
+  const tier = Math.max(0, Math.floor(d.log10() / 3))
   if (tier >= UNITS.length) {
     return `${d.mantissa.toFixed(2)}e+${d.e}`
   }
@@ -16,7 +17,8 @@ export function formatCoins(d: Decimal): string {
     t += 1
     if (t >= UNITS.length) return `${d.mantissa.toFixed(2)}e+${d.e}`
   }
-  return t === 0 ? String(Math.round(mantissa)) : `${mantissa.toFixed(2)}${UNITS[t]}`
+  if (t === 0) return mantissa < 1 ? String(Math.round(mantissa * 100) / 100) : String(Math.round(mantissa))
+  return `${mantissa.toFixed(2)}${UNITS[t]}`
 }
 
 /** 时长显示：秒 / 分 / 小时+分 / 天+小时；负值（时钟回拨）按 0 */

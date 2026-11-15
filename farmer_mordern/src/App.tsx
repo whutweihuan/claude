@@ -20,6 +20,7 @@ export default function App() {
   const [mapId, setMapId] = useState('garden')
   const [selectedPlot, setSelectedPlot] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [shopOpen, setShopOpen] = useState(false)
   useEffect(() => startHeartbeat(getStore()), [])
 
   const unlockedIds = Object.entries(maps)
@@ -42,7 +43,7 @@ export default function App() {
           {loadError}
         </div>
       )}
-      <div className="flex min-h-0 flex-1 gap-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
         <MapRail
           active={activeMap}
           onPick={(id) => {
@@ -57,8 +58,20 @@ export default function App() {
           mapId={activeMap}
           selectedPlotId={selectedPlot}
           now={nowTick}
-          onMigrated={(next) => setMapId(next)}
+          onMigrated={(next) => {
+            setMapId(next)
+            setShopOpen(false)
+          }}
+          mobileOpen={shopOpen}
+          onCloseMobile={() => setShopOpen(false)}
         />
+        <button
+          type="button"
+          onClick={() => setShopOpen((v) => !v)}
+          className="fixed bottom-3 right-3 z-50 rounded-full border border-amber-300/50 bg-amber-400/15 px-4 py-2.5 text-sm text-amber-100 shadow-lg backdrop-blur lg:hidden"
+        >
+          {shopOpen ? '收起商店' : '商店 · 详情'}
+        </button>
       </div>
       <OfflineReportModal />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />

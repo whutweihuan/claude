@@ -103,7 +103,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           <input
             ref={fileRef}
             type="file"
-            accept=".json,application/json"
+            accept=".json,.txt,application/json,text/plain"
             className="hidden"
             onChange={async (e) => {
               const f = e.target.files?.[0]

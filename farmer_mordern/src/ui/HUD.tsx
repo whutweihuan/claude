@@ -3,6 +3,7 @@ import { animate } from 'framer-motion'
 import Decimal from 'break_infinity.js'
 import { getStore } from '../store/gameStore'
 import { formatCoins, formatDuration } from '../game/systems/format'
+import { offlineCapMs } from '../game/systems/offline'
 
 const DISPLAY_MAX = new Decimal('1e15')
 
@@ -48,6 +49,7 @@ function useIncomeRate(): string {
 
 export function HUD({ onOpenSettings }: { onOpenSettings: () => void }) {
   const coins = getStore().useGame((s) => s.game.coins)
+  const capMs = getStore().useGame((s) => offlineCapMs(s.game))
   const rate = useIncomeRate()
   return (
     <header className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-5 py-3 backdrop-blur">
@@ -57,7 +59,7 @@ export function HUD({ onOpenSettings }: { onOpenSettings: () => void }) {
           <div className="text-xl text-amber-200">
             <AnimatedCoins value={coins} />
           </div>
-          <div className="text-[11px] text-white/40">{rate}/秒 · 离线结算上限 {formatDuration(8 * 3600_000)}（棱镜灯可延长）</div>
+          <div className="text-[11px] text-white/40">{rate}/秒 · 离线结算上限 {formatDuration(capMs)}（棱镜灯可延长）</div>
         </div>
         <button
           type="button"

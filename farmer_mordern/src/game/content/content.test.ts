@@ -119,3 +119,13 @@ describe('内容节奏断言（规格 §9 / §4.4）', () => {
     }
   })
 })
+
+describe('内容健壮性（审查建议）', () => {
+  it('生长时长 ≥ 1000ms，保住离线循环上界', () => {
+    for (const map of maps) {
+      for (const c of cropsOf(map.id)) {
+        expect(c.growTimeMs).toBeGreaterThanOrEqual(1000)
+      }
+    }
+  })
+})

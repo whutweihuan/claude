@@ -69,6 +69,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
   let readOnly = false
   let loadError: string | null = null
   let writes = 0
+  let writeError = false
   let hydrated: RunState | null = null as RunState | null
   let lastWrite = Number.NEGATIVE_INFINITY
   let pending: string | null = null
@@ -76,7 +77,17 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
 
   const persistStorage: StateStorage = {
     getItem: (name) => {
-      const outcome = parseSave(unwrapSave(backend.getItem(name)), CONTENT)
+      let raw: string | null
+      try {
+        raw = backend.getItem(name)
+      } catch {
+        // 存储读取异常 ≠ 无档：只读模式，绝不自动开新局覆盖（规格 §5 / 审查 I3）
+        readOnly = true
+        loadError = '存档读取失败（存储异常），本次会话进入只读模式：不会覆盖原文件'
+        hydrated = null
+        return null
+      }
+      const outcome = parseSave(unwrapSave(raw), CONTENT)
       if (outcome.kind === 'ok') {
         hydrated = outcome.state
         return JSON.stringify({ state: { game: toSaveData(outcome.state, outcome.state.lastSeenAt) }, version: 0 })
@@ -101,8 +112,12 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
         }
         pending = null
         lastWrite = now
-        writes += 1
-        backend.setItem(name, value)
+        try {
+          backend.setItem(name, value)
+          writes += 1
+        } catch {
+          writeError = true // 写失败只影响持久化，不影响内存态（审查 I3）
+        }
       } else {
         pending = value
         if (timer === null) {
@@ -110,15 +125,23 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
             timer = null
             if (pending === null || readOnly) return
             lastWrite = clock()
-            writes += 1
-            backend.setItem(name, pending)
+            try {
+              backend.setItem(name, pending)
+              writes += 1
+            } catch {
+              writeError = true
+            }
             pending = null
           }, 1000 - (now - lastWrite))
         }
       }
     },
     removeItem: (name) => {
-      backend.removeItem(name)
+      try {
+        backend.removeItem(name)
+      } catch {
+        writeError = true
+      }
     }
   }
 
@@ -158,7 +181,7 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
         setVolume: (v) => set({ ui: { ...get().ui, volume: Math.min(1, Math.max(0, v)) } }),
         exportSave: () => exportJson(get().game),
         importSave: (text) => {
-          const outcome = parseSave(text, CONTENT)
+          const outcome = parseSave(unwrapSave(text), CONTENT)
           if (outcome.kind !== 'ok') {
             const reason =
               outcome.kind === 'unreadable'
@@ -220,6 +243,9 @@ export function createGameStore(backend: StorageLike, clock: () => number = () =
       },
       get writes() {
         return writes
+      },
+      get writeError() {
+        return writeError
       },
       get loadError() {
         return loadError

@@ -108,7 +108,7 @@ describe('gameStore 心跳与节流', () => {
       return s
     })
     useGame.getState().tick(26_000) // 20000 种下（5000ms 快照）→ 25000 熟 → 窗口内自动收
-    expect(useGame.getState().game.coins.eq(15 - 1 + 12)).toBe(true)
+    expect(useGame.getState().game.coins.eq(15 + 12)).toBe(true)
     expect(useGame.getState().game.lastSeenAt).toBe(26_000)
   })
 })
@@ -132,5 +132,49 @@ describe('导入/导出与重置', () => {
     useGame.getState().hardReset()
     expect(b.map.has(SAVE_KEY)).toBe(false)
     expect(useGame.getState().game.coins.eq(15)).toBe(true)
+  })
+})
+
+describe('审查 I2：自救导出可再导入', () => {
+  it('readRaw 信封产物 → importSave 成功', () => {
+    const b = fakeBackend()
+    const api = createGameStore(b)
+    const raw = api.readRaw()
+    expect(raw).not.toBeNull()
+    const api2 = createGameStore(fakeBackend())
+    const r = api2.useGame.getState().importSave(raw as string)
+    expect(r.ok).toBe(true)
+    expect(api2.useGame.getState().game.coins.eq(15)).toBe(true)
+  })
+})
+
+describe('审查 I3：存储层异常分流', () => {
+  it('getItem 抛异常 → 只读模式，不覆盖不写盘', () => {
+    const bad: StorageLike = {
+      getItem: () => {
+        throw new Error('EACCES')
+      },
+      setItem: () => {
+        throw new Error('quota')
+      },
+      removeItem: () => {}
+    }
+    const api = createGameStore(bad)
+    expect(api.flags.loadError).toContain('只读')
+    expect(api.flags.writes).toBe(0)
+    expect(api.useGame.getState().dispatch({ t: 'plant', plotId: plotKey('garden', 0), cropId: 'radish' })).toBe(true)
+  })
+  it('setItem 抛异常不炸交互', () => {
+    const bad: StorageLike = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceeded')
+      },
+      removeItem: () => {}
+    }
+    const api = createGameStore(bad)
+    expect(() => api.useGame.getState().dispatch({ t: 'plant', plotId: plotKey('garden', 0), cropId: 'radish' })).not.toThrow()
+    expect(api.useGame.getState().game.plots[plotKey('garden', 0)]?.cropId).toBe('radish')
+    expect(api.flags.writeError).toBe(true)
   })
 })
