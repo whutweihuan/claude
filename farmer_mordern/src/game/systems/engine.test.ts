@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import Decimal from 'break_infinity.js'
-import { applyEvent, initialState, plotPrice, soilMult } from './engine'
+import { applyEvent, canMigrate, initialState, plotPrice, soilMult } from './engine'
 import { buildIndex, plotKey } from '../content'
 import type { GameEvent, RunState } from '../types'
 
@@ -141,5 +141,85 @@ describe('swapPreset / clearCrop', () => {
     expect(p?.presetCropId).toBe('radish')
     expect(cleared.coins.eq(s.coins)).toBe(true)
     expect(applyEvent(cleared, { t: 'clearCrop', plotId: plotKey('garden', 0) }, idx, 0).reason).toBe('invalid')
+  })
+})
+
+describe('buyUpgrade', () => {
+  it('沃土购买扣款升级，收获吃新倍率；二级价 ×1.6', () => {
+    const s = fresh(new Decimal(1e9))
+    const s1 = ok(s, { t: 'buyUpgrade', defId: 'soil', scope: 'garden' })
+    expect(s1.coins.eq(new Decimal(1e9).minus(200))).toBe(true)
+    expect(s1.upgrades['soil:garden']).toBe(1)
+    const s2 = ok(s1, { t: 'buyUpgrade', defId: 'soil', scope: 'garden' })
+    expect(s2.coins.eq(new Decimal(1e9).minus(200).minus(320))).toBe(true)
+    expect(s2.upgrades['soil:garden']).toBe(2)
+    const planted = ok(s2, { t: 'plant', plotId: plotKey('garden', 0), cropId: 'radish' })
+    const harvested = ok(planted, { t: 'harvest', plotId: plotKey('garden', 0) }, 5000)
+    expect(harvested.totalEarned.eq(12 * 1.5)).toBe(true)
+  })
+  it('余额不足 noCoins 且状态引用不变；未知 def invalid；锁定的图 locked', () => {
+    const poor = fresh(new Decimal(50))
+    const r = applyEvent(poor, { t: 'buyUpgrade', defId: 'soil', scope: 'garden' }, idx, 0)
+    expect(r.reason).toBe('noCoins')
+    expect(r.state).toBe(poor)
+    expect(applyEvent(poor, { t: 'buyUpgrade', defId: 'nope' as never, scope: 'garden' }, idx, 0).reason).toBe('invalid')
+    expect(applyEvent(fresh(new Decimal(1e12)), { t: 'buyUpgrade', defId: 'soil', scope: 'greenhouse' }, idx, 0).reason).toBe('locked')
+  })
+  it('光合到 maxLevel 后再买被拒', () => {
+    const maxed: RunState = { ...fresh(new Decimal(1e9)), upgrades: { 'speed:garden': 10 } }
+    expect(applyEvent(maxed, { t: 'buyUpgrade', defId: 'speed', scope: 'garden' }, idx, 0).reason).toBe('maxLevel')
+  })
+  it('自动补种需要先买自动收获（同图）', () => {
+    const s = fresh(new Decimal(1e9))
+    expect(applyEvent(s, { t: 'buyUpgrade', defId: 'autoReplant', scope: 'garden' }, idx, 0).reason).toBe('prereq')
+    const withAH = ok(s, { t: 'buyUpgrade', defId: 'autoHarvest', scope: 'garden' })
+    const withAR = ok(withAH, { t: 'buyUpgrade', defId: 'autoReplant', scope: 'garden' })
+    expect(withAR.upgrades['autoReplant:garden']).toBe(1)
+    expect(applyEvent(s, { t: 'buyUpgrade', defId: 'autoReplant', scope: 'greenhouse' }, idx, 0).reason).toBe('locked')
+  })
+  it('棱镜灯任意 scope 归一 global，二级价 ×500', () => {
+    const s = fresh(new Decimal('1e10'))
+    const s1 = ok(s, { t: 'buyUpgrade', defId: 'offlineLamp', scope: 'garden' })
+    expect(s1.upgrades['offlineLamp:global']).toBe(1)
+    expect(s1.coins.eq(new Decimal('1e10').minus('5e6'))).toBe(true)
+    const s2 = ok(s1, { t: 'buyUpgrade', defId: 'offlineLamp', scope: 'global' })
+    expect(s2.coins.eq(new Decimal('1e10').minus('5e6').minus('2.5e9'))).toBe(true)
+    expect(applyEvent(s2, { t: 'buyUpgrade', defId: 'offlineLamp', scope: 'global' }, idx, 0).reason).toBe('maxLevel')
+  })
+})
+
+describe('migrate / canMigrate', () => {
+  function gardenComplete(coins: Decimal): RunState {
+    const s = fresh(coins)
+    for (let n = 0; n < 12; n++) {
+      const p = s.plots[plotKey('garden', n)]
+      if (p) p.unlocked = true
+    }
+    return s
+  }
+  it('菜园未满 → notSequenced；满了但没钱 → noCoins', () => {
+    const partial = fresh(new Decimal('1e9'))
+    expect(applyEvent(partial, { t: 'migrate', mapId: 'greenhouse' }, idx, 0).reason).toBe('notSequenced')
+    const done = gardenComplete(new Decimal(100))
+    expect(applyEvent(done, { t: 'migrate', mapId: 'greenhouse' }, idx, 0).reason).toBe('noCoins')
+  })
+  it('成功：扣迁徙费、解锁花房赠地与自动作物、菜园原样保留', () => {
+    const s = gardenComplete(new Decimal('1e7'))
+    const s1 = ok(s, { t: 'migrate', mapId: 'greenhouse' })
+    expect(s1.coins.eq(0)).toBe(true)
+    expect(s1.maps['greenhouse']?.unlocked).toBe(true)
+    expect(s1.plots[plotKey('greenhouse', 0)]?.unlocked).toBe(true)
+    expect(s1.plots[plotKey('greenhouse', 1)]?.unlocked).toBe(true)
+    expect(s1.plots[plotKey('greenhouse', 2)]?.unlocked).toBe(false)
+    expect(s1.cropsUnlocked['orchid']).toBe(true)
+    expect(s1.plots[plotKey('garden', 11)]?.unlocked).toBe(true)
+    expect(applyEvent(s1, { t: 'migrate', mapId: 'greenhouse' }, idx, 0).reason).toBe('alreadyOwned')
+    expect(applyEvent(s1, { t: 'migrate', mapId: 'aurora' }, idx, 0).reason).toBe('invalid')
+    expect(applyEvent(s1, { t: 'migrate', mapId: 'garden' }, idx, 0).reason).toBe('alreadyOwned')
+  })
+  it('canMigrate 报告缺口', () => {
+    expect(canMigrate(fresh(new Decimal(1e9)), idx, 'greenhouse').missing).toBe('plots')
+    expect(canMigrate(gardenComplete(new Decimal(100)), idx, 'greenhouse').missing).toBe('coins')
+    expect(canMigrate(gardenComplete(new Decimal('1e7')), idx, 'greenhouse').ok).toBe(true)
   })
 })

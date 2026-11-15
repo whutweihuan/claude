@@ -1,6 +1,6 @@
 import { Decimal } from '../types'
-import type { ApplyResult, GameEvent, RunState } from '../types'
-import { buildIndex, plotKey, plotPrice, upgradeKey } from '../content'
+import type { ApplyResult, CropDef, GameEvent, MapDef, RunState } from '../types'
+import { buildIndex, plotKey, plotPrice, upgradeCost, upgradeKey } from '../content'
 import type { ContentIndex } from '../content'
 import { effectiveGrowMs, isMature } from './growth'
 
@@ -23,6 +23,16 @@ function parsePlotId(id: string): PlotRef | null {
 
 export function soilMult(s: RunState, _c: ContentIndex, mapId: string): number {
   return 1 + 0.25 * (s.upgrades[upgradeKey('soil', mapId)] ?? 0)
+}
+
+/**
+ * 收获金额 = yield × (100 + 25×soil级) ÷ 100。
+ * 全程 Decimal 整数基点运算，避免 1.5 之类的浮点乘数引入 ULP 漂移
+ * （在线/离线一致性测试要求两条路径逐位相等）。
+ */
+export function harvestGain(s: RunState, _c: ContentIndex, mapId: string, crop: CropDef): Decimal {
+  const lvl = s.upgrades[upgradeKey('soil', mapId)] ?? 0
+  return new Decimal(crop.yieldCoins).mul(100 + 25 * lvl).div(100)
 }
 
 function speedLevel(s: RunState, mapId: string): number {
@@ -123,7 +133,7 @@ function doHarvest(s: RunState, c: ContentIndex, plotId: string, now: number): A
   if (plot.cropId === null || !isMature(plot, now)) return reject(s, 'invalid')
   const crop = c.cropById[plot.cropId]
   if (!crop) return reject(s, 'invalid')
-  const gain = new Decimal(crop.yieldCoins).mul(soilMult(s, c, ref.mapId))
+  const gain = harvestGain(s, c, ref.mapId, crop)
   const next = cloneState(s)
   const p = next.plots[plotId]
   if (!p) return reject(s, 'invalid')
@@ -210,9 +220,72 @@ export function applyEvent(s: RunState, ev: GameEvent, c: ContentIndex, now: num
     case 'clearCrop':
       return doClearCrop(s, ev.plotId)
     case 'buyUpgrade':
+      return doBuyUpgrade(s, c, ev.defId, ev.scope)
     case 'migrate':
-      return reject(s, 'invalid') // 任务 6 实现
+      return doMigrate(s, c, ev.mapId)
   }
+}
+
+function doBuyUpgrade(s: RunState, c: ContentIndex, defId: string, scope: string): ApplyResult {
+  const def = c.upgradeById[defId]
+  if (!def) return reject(s, 'invalid')
+  const effScope = def.scope === 'global' ? 'global' : scope
+  let mapDef: MapDef | null = null
+  if (def.scope === 'map') {
+    mapDef = c.mapById[effScope] ?? null
+    if (!mapDef) return reject(s, 'invalid')
+    if (!s.maps[mapDef.id]?.unlocked) return reject(s, 'locked')
+  }
+  const key = upgradeKey(def.id, effScope)
+  const level = s.upgrades[key] ?? 0
+  if (level >= def.maxLevel) return reject(s, 'maxLevel')
+  if (def.kind === 'autoReplant' && (s.upgrades[upgradeKey('autoHarvest', effScope)] ?? 0) < 1) {
+    return reject(s, 'prereq')
+  }
+  const cost = upgradeCost(def, mapDef, level)
+  if (s.coins.lt(cost)) return reject(s, 'noCoins')
+  const next = cloneState(s)
+  next.coins = next.coins.minus(cost)
+  next.upgrades[key] = level + 1
+  return { ok: true, state: next }
+}
+
+/** 目标图 = 当前已解锁最高图的下一张；前图全开垦；支付前图迁徙费（§4.2） */
+export function canMigrate(s: RunState, c: ContentIndex, mapId: string): { ok: boolean; missing: 'plots' | 'coins' | 'prereq' } {
+  const target = c.mapById[mapId]
+  if (!target) return { ok: false, missing: 'prereq' }
+  if (s.maps[mapId]?.unlocked) return { ok: false, missing: 'prereq' }
+  const prev = c.maps[target.order - 2]
+  if (!prev || !s.maps[prev.id]?.unlocked) return { ok: false, missing: 'prereq' }
+  const allOpen = Array.from({ length: prev.plotCount }, (_, n) => s.plots[plotKey(prev.id, n)]?.unlocked === true).every(Boolean)
+  if (!allOpen) return { ok: false, missing: 'plots' }
+  if (prev.migrationCost === null || s.coins.lt(prev.migrationCost)) return { ok: false, missing: 'coins' }
+  return { ok: true, missing: 'coins' }
+}
+
+function doMigrate(s: RunState, c: ContentIndex, mapId: string): ApplyResult {
+  const target = c.mapById[mapId]
+  if (!target) return reject(s, 'invalid')
+  if (s.maps[mapId]?.unlocked) return reject(s, 'alreadyOwned')
+  const prev = c.maps[target.order - 2]
+  if (!prev) return reject(s, 'invalid')
+  if (!s.maps[prev.id]?.unlocked) return reject(s, 'invalid') // 不允许跳图
+  for (let n = 0; n < prev.plotCount; n++) {
+    if (!s.plots[plotKey(prev.id, n)]?.unlocked) return reject(s, 'notSequenced')
+  }
+  if (prev.migrationCost === null) return reject(s, 'invalid')
+  const cost = new Decimal(prev.migrationCost)
+  if (s.coins.lt(cost)) return reject(s, 'noCoins')
+  const next = cloneState(s)
+  next.coins = next.coins.minus(cost)
+  const ms = next.maps[mapId]
+  if (ms) ms.unlocked = true
+  for (let n = 0; n < target.freePlots; n++) {
+    const p = next.plots[plotKey(mapId, n)]
+    if (p) p.unlocked = true
+  }
+  autoUnlockCrops(next, c, mapId)
+  return { ok: true, state: next }
 }
 
 export { buildIndex }
