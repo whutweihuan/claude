@@ -102,13 +102,16 @@ class CalculatorApp:
 
     def _evaluate(self, expr):
         expr = expr.strip()
-        op_index = -1
-        op_char = None
-        for i, ch in enumerate(expr):
-            if ch in self._OPS and i > 0:
-                op_index, op_char = i, ch
-        if op_index == -1:
+        op_positions = [i for i, ch in enumerate(expr) if ch in self._OPS and i > 0]
+        if len(op_positions) > 1:
+            # Basic calculator: one binary operation at a time. Anything with
+            # more than one operator is rejected with a clear message instead
+            # of a cryptic float() conversion error.
+            raise ValueError("Invalid expression: use one operator at a time")
+        if not op_positions:
             return float(expr)
+        op_index = op_positions[0]
+        op_char = expr[op_index]
         a = float(expr[:op_index])
         b = float(expr[op_index + 1:])
         return getattr(calculator, self._OPS[op_char])(a, b)
