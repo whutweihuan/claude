@@ -60,8 +60,11 @@ class CalculatorApp:
             self.entry.insert('end', label)
 
     def calculate(self):
-        result = self._evaluate(self.entry.get())
-        self._set_entry(self._format(result))
+        try:
+            result = self._evaluate(self.entry.get())
+            self._set_entry(self._format(result))
+        except ValueError as e:
+            self._set_entry(f"Error: {str(e)}")
 
     def _set_entry(self, text):
         self.entry.delete(0, 'end')
