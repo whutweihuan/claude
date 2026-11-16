@@ -199,3 +199,60 @@ test('healExploreSuccess 探索成功 +10~15，封顶上限', () => {
   assert.ok(p.hp >= 100 && p.hp <= 110); // 至少回满
   assert.ok(p.hp <= 100); // 但封顶 100
 });
+
+// ===== 任务 4：流程状态机 + 20 层怪物数据 =====
+
+test('newGame 法师初始值正确', () => {
+  const s = GL.newGame('mage');
+  assert.equal(s.hp, 100); assert.equal(s.maxHp, 100);
+  assert.equal(s.mana, 100); assert.equal(s.atk, 5); assert.equal(s.def, 5); assert.equal(s.intel, 8);
+  assert.equal(s.floor, 1);
+});
+
+test('newGame 战士初始值正确', () => {
+  const s = GL.newGame('warrior');
+  assert.equal(s.hp, 200); assert.equal(s.mana, 50); assert.equal(s.atk, 15); assert.equal(s.def, 10);
+});
+
+test('MONSTERS 有 20 个，第 20 个是最终 Boss', () => {
+  assert.equal(GL.MONSTERS.length, 20);
+  assert.equal(GL.MONSTERS[19].name, '复苏之影(最终Boss)');
+  assert.ok(GL.MONSTERS[19].hp > GL.MONSTERS[0].hp); // 曲线递增
+});
+
+test('shouldEncounter：1-2 次探索后必遇怪', () => {
+  const s = GL.newGame('mage');
+  assert.equal(GL.shouldEncounter(s, 0), false);
+  assert.equal(GL.shouldEncounter(s, 1), true);  // ≥1 次探索
+  assert.equal(GL.shouldEncounter(s, 2), true);
+});
+
+test('advanceFloor 击败怪物后进入下一层，并回补 25% HP', () => {
+  const s = GL.newGame('mage');
+  s.hp = 10; // 低血
+  GL.advanceFloor(s);
+  assert.equal(s.floor, 2);
+  assert.ok(s.hp >= 35); // 回补 25%
+});
+
+test('checkVictory：击败 20 层 Boss → 胜利', () => {
+  const s = GL.newGame('mage');
+  s.floor = 20;
+  assert.equal(GL.checkVictory(s, true), true);  // 20 层且击败
+  assert.equal(GL.checkVictory(s, false), false); // 未击败
+});
+
+test('checkDefeat：玩家 HP≤0 → 失败', () => {
+  const s = GL.newGame('mage');
+  s.hp = 0;
+  assert.equal(GL.checkDefeat(s), true);
+  s.hp = 1;
+  assert.equal(GL.checkDefeat(s), false);
+});
+
+test('getFloorContent 返回该层怪物与互动元素', () => {
+  const c = GL.getFloorContent(1);
+  assert.equal(c.monster.name, '洞穴巨鼠');
+  assert.ok(Array.isArray(c.interactions));
+  assert.ok(c.interactions.length >= 1);
+});

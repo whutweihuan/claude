@@ -334,6 +334,96 @@
     return out;
   }
 
+  // ---- 任务 4：流程状态机 + 20 层怪物数据 ----
+
+  // 角色初始值（C19 小写键，与 charType/SKILLS 对齐）
+  const CHARS = {
+    mage:    { hp:100, maxHp:100, mana:100, maxMana:100, atk:5,  def:5,  intel:8 },
+    warrior: { hp:200, maxHp:200, mana:50,  maxMana:50,  atk:15, def:10, intel:5 },
+  };
+
+  // 20 层怪物曲线（逐字来自计划；maxHp = hp）
+  const MONSTERS = [
+    { name:'洞穴巨鼠',       hp:50,  maxHp:50,  atk:7,  def:3,  skillDmg:14 },
+    { name:'腐尸',           hp:70,  maxHp:70,  atk:9,  def:4,  skillDmg:18 },
+    { name:'幽影蝙蝠',       hp:90,  maxHp:90,  atk:11, def:5,  skillDmg:22 },
+    { name:'毒液蛛',         hp:110, maxHp:110, atk:13, def:6,  skillDmg:26 },
+    { name:'骷髅守卫',       hp:130, maxHp:130, atk:15, def:7,  skillDmg:30 },
+    { name:'嗜血狼',         hp:150, maxHp:150, atk:17, def:8,  skillDmg:34 },
+    { name:'地精掠夺者',     hp:170, maxHp:170, atk:19, def:9,  skillDmg:38 },
+    { name:'石像鬼',         hp:190, maxHp:190, atk:21, def:10, skillDmg:42 },
+    { name:'暗影刺客',       hp:210, maxHp:210, atk:23, def:11, skillDmg:46 },
+    { name:'深渊骑士',       hp:230, maxHp:230, atk:25, def:12, skillDmg:50 },
+    { name:'毒龙幼崽',       hp:250, maxHp:250, atk:27, def:13, skillDmg:54 },
+    { name:'血魔',           hp:270, maxHp:270, atk:29, def:14, skillDmg:58 },
+    { name:'亡魂骑士',       hp:290, maxHp:290, atk:31, def:15, skillDmg:62 },
+    { name:'熔岩兽',         hp:310, maxHp:310, atk:33, def:16, skillDmg:66 },
+    { name:'虚空行者',       hp:330, maxHp:330, atk:35, def:17, skillDmg:70 },
+    { name:'冰霜巨人',       hp:350, maxHp:350, atk:37, def:18, skillDmg:74 },
+    { name:'堕落天使',       hp:370, maxHp:370, atk:39, def:19, skillDmg:78 },
+    { name:'龙裔',           hp:390, maxHp:390, atk:41, def:20, skillDmg:82 },
+    { name:'深渊领主',       hp:410, maxHp:410, atk:43, def:21, skillDmg:86 },
+    { name:'复苏之影(最终Boss)', hp:480, maxHp:480, atk:48, def:24, skillDmg:96 },
+  ];
+
+  // 新建游戏状态
+  function newGame(charType) {
+    const c = CHARS[charType] || CHARS.mage;
+    return {
+      charType: CHARS[charType] ? charType : 'mage',
+      hp: c.hp, maxHp: c.maxHp,
+      mana: c.mana, maxMana: c.maxMana,
+      atk: c.atk, def: c.def, intel: c.intel,
+      floor: 1,
+      exploredThisFloor: 0,
+      equipment: {},
+      over: false,
+      won: false,
+    };
+  }
+
+  // 必遇怪：≥1 次探索后遭遇变为必选（C3）
+  function shouldEncounter(state, exploredCount) {
+    return exploredCount >= 1;
+  }
+
+  // 进入下一层：层数 +1、重置探索计数、回补 25% HP、饰品回法（C21）、超 20 层标记结束
+  function advanceFloor(state) {
+    state.floor += 1;
+    state.exploredThisFloor = 0;
+    healOnNewFloor(state);
+    const trinket = (state.equipment && state.equipment.trinket) || {};
+    if (typeof trinket.manaRegen === 'number' && typeof state.mana === 'number' && typeof state.maxMana === 'number') {
+      state.mana = Math.min(state.maxMana, state.mana + trinket.manaRegen);
+    }
+    if (state.floor > 20) state.over = true;
+  }
+
+  // 胜利：第 20 层且击败该层怪物
+  function checkVictory(state, monsterDefeated) {
+    return state.floor === 20 && monsterDefeated;
+  }
+
+  // 失败：玩家 HP ≤ 0
+  function checkDefeat(state) {
+    return state.hp <= 0;
+  }
+
+  // 该层内容：怪物 + 1~3 个互动元素 id（rng 可选，C9）
+  function getFloorContent(floor, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const monster = MONSTERS[floor - 1] || MONSTERS[0];
+    const pool = ['box', 'puzzle', 'rps', 'altar', 'trap'];
+    const count = 1 + Math.floor(rng() * 3); // 1~3 个
+    const picks = [];
+    const avail = pool.slice();
+    while (picks.length < count && avail.length > 0) {
+      const idx = Math.floor(rng() * avail.length);
+      picks.push(avail.splice(idx, 1)[0]);
+    }
+    return { monster, interactions: picks };
+  }
+
   const GameLogic = {
     MANA_PER_TURN,
     CRIT_CHANCE,
@@ -359,6 +449,14 @@
     healOnNewFloor,
     healExploreSuccess,
     healAltar,
+    CHARS,
+    MONSTERS,
+    newGame,
+    shouldEncounter,
+    advanceFloor,
+    checkVictory,
+    checkDefeat,
+    getFloorContent,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = GameLogic;
