@@ -48,14 +48,19 @@ class CalculatorApp:
             ['1', '2', '3', '-'],
             ['0', '.', 'C', '+'],
         ]
+        # Buttons are kept in self.buttons (keyed by label) so callers and
+        # tests can drive the real widgets (e.g. buttons['2'].invoke()).
+        self.buttons = {}
         for row_index, row in enumerate(layout):
             for col_index, label in enumerate(row):
-                ttk.Button(
+                button = ttk.Button(
                     button_frame,
                     text=label,
                     width=4,
                     command=lambda l=label: self._press(l),
-                ).grid(row=row_index, column=col_index, padx=2, pady=2)
+                )
+                button.grid(row=row_index, column=col_index, padx=2, pady=2)
+                self.buttons[label] = button
 
         # Full-width equals button triggers the calculation, alongside the
         # Enter key, so a real user can actually run an expression.
