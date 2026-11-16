@@ -424,6 +424,134 @@
     return { monster, interactions: picks };
   }
 
+  // ---- C4：互动判定纯函数（rng 注入，UI 只调用不内联概率）----
+
+  // 箱子（C10）：20% 概率陷阱（5~10 伤害），否则获得 rollReward 奖励
+  function openBox(player, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const out = { trapped: false, reward: null, log: '' };
+    if (rng() < 0.2) {
+      const dmg = ri(rng, 5, 10);
+      if (typeof player.hp === 'number') player.hp = Math.max(0, player.hp - dmg);
+      out.trapped = true;
+      out.log = `箱子里藏着陷阱，你受到 ${dmg} 点伤害！`;
+    } else {
+      out.reward = rollReward(rng);
+      applyReward(player, out.reward);
+      out.log = '箱子里有一份奖励！';
+    }
+    return out;
+  }
+
+  // 谜题机关（C11）：50/50，成功得奖励，失败 5~10 伤害
+  function solvePuzzle(player, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const out = { solved: false, reward: null, log: '' };
+    if (rng() < 0.5) {
+      out.solved = true;
+      out.reward = rollReward(rng);
+      applyReward(player, out.reward);
+      out.log = '你破解了谜题机关，获得奖励！';
+    } else {
+      const dmg = ri(rng, 5, 10);
+      if (typeof player.hp === 'number') player.hp = Math.max(0, player.hp - dmg);
+      out.log = `谜题机关反噬，你受到 ${dmg} 点伤害！`;
+    }
+    return out;
+  }
+
+  // 猜拳石像（C12）：出招 1=石 2=布 3=剪；怪物出招 1+floor(rng*3)；赢奖励、输 5~10 伤害、平局无事
+  function playRps(player, playerMove, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const monsterMove = 1 + Math.floor(rng() * 3);
+    const out = { monsterMove, result: 'tie', reward: null, log: '' };
+    const win  = (playerMove === 1 && monsterMove === 3) ||
+                 (playerMove === 2 && monsterMove === 1) ||
+                 (playerMove === 3 && monsterMove === 2);
+    const lose = (playerMove === 3 && monsterMove === 1) ||
+                 (playerMove === 1 && monsterMove === 2) ||
+                 (playerMove === 2 && monsterMove === 3);
+    if (win) {
+      out.result = 'win';
+      out.reward = rollReward(rng);
+      applyReward(player, out.reward);
+      out.log = '你赢了石像的猜拳，获得奖励！';
+    } else if (lose) {
+      out.result = 'lose';
+      const dmg = ri(rng, 5, 10);
+      if (typeof player.hp === 'number') player.hp = Math.max(0, player.hp - dmg);
+      out.log = `石像赢了猜拳，你受到 ${dmg} 点伤害！`;
+    } else {
+      out.log = '与石像猜拳平局，无事发生。';
+    }
+    return out;
+  }
+
+  // 陷阱通道（C13）：直接通过 30% 概率 5~10 伤害，必通过
+  function crossTrap(player, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const out = { passed: true, triggered: false, log: '' };
+    if (rng() < 0.3) {
+      const dmg = ri(rng, 5, 10);
+      if (typeof player.hp === 'number') player.hp = Math.max(0, player.hp - dmg);
+      out.triggered = true;
+      out.log = `陷阱通道触发了，你受到 ${dmg} 点伤害，但挣脱了出去！`;
+    } else {
+      out.log = '你安全通过了陷阱通道。';
+    }
+    return out;
+  }
+
+  // 先探查陷阱通道（C13）：走探索判定，成功安全通过，失败受伤但通过
+  function scoutTrap(state, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const check = rollExploration(totalIntel(state), rng);
+    const out = {
+      passed: true,
+      success: check.success,
+      difficulty: check.difficulty,
+      roll: check.roll,
+      points: check.points,
+      log: '',
+    };
+    if (!check.success) {
+      const dmg = ri(rng, 5, 10);
+      if (typeof state.hp === 'number') state.hp = Math.max(0, state.hp - dmg);
+      out.log = `探查未完全成功：你险险避开，但仍被机关擦伤 ${dmg} 点（依然通过）。`;
+    } else {
+      out.log = '探查成功：你找到了安全路径，安然通过。';
+    }
+    return out;
+  }
+
+  // 探索失败惩罚（C15）：50/50——5~10 伤害，或立即触发怪物遭遇
+  function explorationFailPenalty(player, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const out = { encounter: false, log: '' };
+    if (rng() < 0.5) {
+      const dmg = ri(rng, 5, 10);
+      if (typeof player.hp === 'number') player.hp = Math.max(0, player.hp - dmg);
+      out.log = `探索失败：你触动了诅咒，受到 ${dmg} 点伤害！`;
+    } else {
+      out.encounter = true;
+      out.log = '探索失败：你惊动了黑暗中的某种东西！';
+    }
+    return out;
+  }
+
+  // 探索成功奖励（C16）：必得 +10~15 HP，另 50% 概率追加 rollReward
+  function explorationSuccessReward(player, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    const out = { reward: null, log: '探索成功！' };
+    healExploreSuccess(player, rng);
+    if (rng() < 0.5) {
+      out.reward = rollReward(rng);
+      applyReward(player, out.reward);
+      out.log += ' 还意外获得了一份奖励！';
+    }
+    return out;
+  }
+
   const GameLogic = {
     MANA_PER_TURN,
     CRIT_CHANCE,
@@ -457,6 +585,13 @@
     checkVictory,
     checkDefeat,
     getFloorContent,
+    openBox,
+    solvePuzzle,
+    playRps,
+    crossTrap,
+    scoutTrap,
+    explorationFailPenalty,
+    explorationSuccessReward,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = GameLogic;

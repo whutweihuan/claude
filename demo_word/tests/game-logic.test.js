@@ -256,3 +256,92 @@ test('getFloorContent 返回该层怪物与互动元素', () => {
   assert.ok(Array.isArray(c.interactions));
   assert.ok(c.interactions.length >= 1);
 });
+
+// ===== C4：互动判定纯函数（箱/谜题/猜拳/陷阱通道/探索奖惩）=====
+
+test('openBox：20% 陷阱(5~10伤害)，否则掉落奖励', () => {
+  const p = { hp:100, maxHp:100, atk:5, def:5, intel:8, mana:50, maxMana:100, equipment:{} };
+  const t = GL.openBox(p, () => 0.1); // 0.1 < 0.2 → 陷阱
+  assert.equal(t.trapped, true);
+  assert.equal(p.hp, 95); // 100 - 5
+  const p2 = { hp:100, maxHp:100, atk:5, def:5, intel:8, mana:50, maxMana:100, equipment:{} };
+  const g = GL.openBox(p2, () => 0.9); // 0.9 ≥ 0.2 → 奖励（法力水晶）
+  assert.equal(g.trapped, false);
+  assert.ok(g.reward);
+  assert.equal(p2.equipment.trinket.name, '法力水晶');
+});
+
+test('solvePuzzle：50/50，成功奖励、失败 5~10 伤害', () => {
+  const p = { hp:100, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const f = GL.solvePuzzle(p, () => 0.9); // 0.9 ≥ 0.5 → 失败，伤 10
+  assert.equal(f.solved, false);
+  assert.equal(p.hp, 90);
+  const p2 = { hp:100, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const s = GL.solvePuzzle(p2, () => 0.1); // 0.1 < 0.5 → 成功，atk +1
+  assert.equal(s.solved, true);
+  assert.equal(s.reward.kind, 'atk');
+  assert.equal(p2.atk, 6);
+});
+
+test('playRps：赢奖励、输 5~10 伤害、平局无事（怪物出招 1+floor(rng*3)）', () => {
+  const p = { hp:100, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const w = GL.playRps(p, 1, () => 0.9); // 怪物 3(剪)，玩家 1(石) → 赢
+  assert.equal(w.result, 'win');
+  assert.ok(w.reward);
+  const p2 = { hp:100, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const l = GL.playRps(p2, 2, () => 0.9); // 怪物 3，玩家 2(布) → 输
+  assert.equal(l.result, 'lose');
+  assert.equal(p2.hp, 90); // 100 - 10
+  const p3 = { hp:100, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const d = GL.playRps(p3, 3, () => 0.9); // 平局
+  assert.equal(d.result, 'tie');
+  assert.equal(p3.hp, 100);
+});
+
+test('crossTrap：直接通过 30% 5~10 伤害，必通过', () => {
+  const p = { hp:100, maxHp:100 };
+  const t = GL.crossTrap(p, () => 0.1); // 0.1 < 0.3 → 触发
+  assert.equal(t.passed, true);
+  assert.equal(t.triggered, true);
+  assert.equal(p.hp, 95);
+  const p2 = { hp:100, maxHp:100 };
+  const s = GL.crossTrap(p2, () => 0.9); // 安全
+  assert.equal(s.passed, true);
+  assert.equal(s.triggered, false);
+  assert.equal(p2.hp, 100);
+});
+
+test('scoutTrap：成功安全通过，失败受伤但通过', () => {
+  const p = { hp:100, maxHp:100, intel:8 }; // 8 + 6 = 14 > 13 → 成功
+  const s = GL.scoutTrap(p, () => 0.9);
+  assert.equal(s.success, true);
+  assert.equal(s.passed, true);
+  assert.equal(p.hp, 100);
+  const p2 = { hp:100, maxHp:100, intel:5 }; // 5 + 6 = 11 < 13 → 失败
+  const f = GL.scoutTrap(p2, () => 0.9);
+  assert.equal(f.success, false);
+  assert.equal(f.passed, true);
+  assert.equal(p2.hp, 90);
+});
+
+test('explorationFailPenalty：50/50 — 5~10 伤害或立即遭遇', () => {
+  const p = { hp:100, maxHp:100 };
+  const d = GL.explorationFailPenalty(p, () => 0.1); // 0.1 < 0.5 → 伤害
+  assert.equal(d.encounter, false);
+  assert.equal(p.hp, 95);
+  const p2 = { hp:100, maxHp:100 };
+  const e = GL.explorationFailPenalty(p2, () => 0.9); // 遭遇
+  assert.equal(e.encounter, true);
+  assert.equal(p2.hp, 100);
+});
+
+test('explorationSuccessReward：必得 +10~15 HP，50% 追加掉落', () => {
+  const p = { hp:50, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const r = GL.explorationSuccessReward(p, () => 0.1); // 回 10；0.1 < 0.5 → 追加
+  assert.equal(p.hp, 60);
+  assert.ok(r.reward);
+  const p2 = { hp:50, maxHp:100, atk:5, def:5, intel:8, equipment:{} };
+  const r2 = GL.explorationSuccessReward(p2, () => 0.9); // 回 15；无追加
+  assert.equal(p2.hp, 65);
+  assert.equal(r2.reward, null);
+});
