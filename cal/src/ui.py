@@ -33,6 +33,10 @@ class CalculatorApp:
         self.entry = ttk.Entry(self.root, font=('Arial', 20))
         self.entry.pack(pady=10)
 
+        # History line: shows the last calculation as "expression=result".
+        self.history = ttk.Entry(self.root, font=('Arial', 12))
+        self.history.pack(pady=5)
+
         button_frame = ttk.Frame(self.root)
         button_frame.pack()
 
@@ -60,11 +64,20 @@ class CalculatorApp:
             self.entry.insert('end', label)
 
     def calculate(self):
+        # Capture the expression BEFORE rewriting the entry, so the history
+        # records the original input rather than the result.
+        expression = self.entry.get()
         try:
-            result = self._evaluate(self.entry.get())
-            self._set_entry(self._format(result))
+            result = self._evaluate(expression)
+            formatted = self._format(result)
+            self._set_entry(formatted)
+            self.update_history(expression, formatted)
         except ValueError as e:
             self._set_entry(f"Error: {str(e)}")
+
+    def update_history(self, expression, result):
+        self.history.delete(0, 'end')
+        self.history.insert(0, f"{expression}={result}")
 
     def _set_entry(self, text):
         self.entry.delete(0, 'end')
