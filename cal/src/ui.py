@@ -57,6 +57,17 @@ class CalculatorApp:
                     command=lambda l=label: self._press(l),
                 ).grid(row=row_index, column=col_index, padx=2, pady=2)
 
+        # Full-width equals button triggers the calculation, alongside the
+        # Enter key, so a real user can actually run an expression.
+        self.equals_button = ttk.Button(
+            button_frame,
+            text='=',
+            width=4,
+            command=self.calculate,
+        )
+        self.equals_button.grid(row=len(layout), column=0, columnspan=len(layout[0]), padx=2, pady=2)
+        self.root.bind('<Return>', lambda event: self.calculate())
+
     def _press(self, label):
         if label == 'C':
             self.entry.delete(0, 'end')
