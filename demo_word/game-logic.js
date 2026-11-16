@@ -209,6 +209,131 @@
     }
   }
 
+  // ---- 任务 3：奖励 / 装备槽 / HP 经济纯函数 ----
+
+  // 总智力 = 基础智力 + 饰品智力（C22：探索判定与面板一律用总智力）
+  function totalIntel(p) {
+    const eq = (p && p.equipment && p.equipment.trinket) || {};
+    return (p ? (p.intel || 0) : 0) + (eq.intel || 0);
+  }
+
+  // 属性成长：atk/def/intel 直接加；hpMax 提升上限并回满 HP
+  function applyStatReward(player, reward) {
+    if (!reward || typeof reward.amount !== 'number') return;
+    if (reward.kind === 'hpMax') {
+      player.maxHp = (player.maxHp || 0) + reward.amount;
+      if (typeof player.hp === 'number') player.hp = player.maxHp; // 回满
+    } else if (reward.kind === 'atk' || reward.kind === 'def' || reward.kind === 'intel') {
+      player[reward.kind] = (player[reward.kind] || 0) + reward.amount;
+    }
+  }
+
+  // 装备槽数值：weapon→atk，armor→def，trinket→intel+回法力（同槽比较用，C23 严格更高才换）
+  function equipValue(item) {
+    return (item.atk || 0) + (item.def || 0) + (item.intel || 0) + (item.manaRegen || 0);
+  }
+
+  // 装备入槽：同槽旧装备数值严格更高则丢弃，否则替换
+  function applyEquipment(player, item) {
+    if (!item || !item.slot) return;
+    if (!player.equipment) player.equipment = {};
+    const old = player.equipment[item.slot];
+    if (old && equipValue(old) >= equipValue(item)) return; // 同值/更低 → 丢弃
+    player.equipment[item.slot] = item;
+  }
+
+  // 随机整数 [a,b]（rng ∈ [0,1)）
+  function ri(rng, a, b) {
+    return a + Math.floor(rng() * (b - a + 1));
+  }
+
+  // 掉落：50/50 属性成长或装备（C20 结构，UI 按 type 路由）
+  function rollReward(rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    if (rng() < 0.5) {
+      // 属性成长
+      const kinds = ['atk', 'def', 'hpMax', 'intel'];
+      const kind = kinds[Math.floor(rng() * kinds.length)];
+      let amount;
+      if (kind === 'atk') amount = ri(rng, 1, 3);
+      else if (kind === 'def') amount = ri(rng, 1, 2);
+      else if (kind === 'hpMax') amount = ri(rng, 10, 20);
+      else amount = 1; // intel +1
+      return { type:'stat', kind, amount };
+    }
+    // 装备
+    const slots = ['weapon', 'armor', 'trinket'];
+    const slot = slots[Math.floor(rng() * slots.length)];
+    if (slot === 'weapon') {
+      const atk = ri(rng, 2, 6);
+      const names = ['铁剑', '钢剑', '银剑', '秘银剑', '魔纹剑'];
+      return { type:'equipment', slot, name: names[atk - 2], atk };
+    }
+    if (slot === 'armor') {
+      const def = ri(rng, 1, 4);
+      const names = ['皮甲', '锁子甲', '板甲', '龙鳞甲'];
+      return { type:'equipment', slot, name: names[def - 1], def };
+    }
+    // trinket：+智力 1~2 或 每层回法（C21 值 5）
+    if (rng() < 0.5) {
+      const intel = ri(rng, 1, 2);
+      const names = ['智慧戒', '贤者符'];
+      return { type:'equipment', slot, name: names[intel - 1], intel };
+    }
+    return { type:'equipment', slot, name:'法力水晶', manaRegen: 5 };
+  }
+
+  // 路由：按 reward.type 落到对应 apply（C20）
+  function applyReward(player, reward) {
+    if (!reward) return;
+    if (reward.type === 'stat') applyStatReward(player, reward);
+    else if (reward.type === 'equipment') applyEquipment(player, reward);
+  }
+
+  // 每层回血 = floor(maxHp × 25%)，封顶（C24 取整）
+  function healOnNewFloor(player) {
+    if (typeof player.hp !== 'number' || typeof player.maxHp !== 'number') return;
+    const heal = Math.floor(player.maxHp * 0.25);
+    player.hp = Math.min(player.maxHp, player.hp + heal);
+  }
+
+  // 探索成功：+10~15 HP，封顶（rng 可选，默认 Math.random）
+  function healExploreSuccess(player, rng) {
+    if (typeof rng !== 'function') rng = Math.random;
+    if (typeof player.hp !== 'number' || typeof player.maxHp !== 'number') return;
+    const heal = ri(rng, 10, 15);
+    player.hp = Math.min(player.maxHp, player.hp + heal);
+  }
+
+  // 祭坛（C14）：pray = 法力 +30 封顶；risk = 50/50 大奖励或 10~20 伤害
+  function healAltar(player, rng, mode) {
+    if (typeof rng !== 'function') rng = Math.random;
+    if (mode === undefined) mode = 'pray';
+    const out = { healed: 0, manaHealed: 0, riskTaken: mode === 'risk', reward: null, log: '' };
+    if (mode === 'pray') {
+      if (typeof player.mana === 'number' && typeof player.maxMana === 'number') {
+        const before = player.mana;
+        player.mana = Math.min(player.maxMana, player.mana + 30);
+        out.manaHealed = player.mana - before;
+      }
+      out.log = '你在祭坛祈祷，法力得到恢复。';
+    } else {
+      if (rng() < 0.5) {
+        const reward = rollReward(rng);
+        const hpBefore = typeof player.hp === 'number' ? player.hp : 0;
+        applyReward(player, reward);
+        out.reward = reward;
+        if (typeof player.hp === 'number') out.healed = Math.max(0, player.hp - hpBefore);
+        out.log = '祭坛回应了你的冒险，赐予你奖励！';
+      } else {
+        const dmg = ri(rng, 10, 20);
+        if (typeof player.hp === 'number') player.hp = Math.max(0, player.hp - dmg);
+        out.log = `祭坛的诅咒击中你，受到 ${dmg} 点伤害！`;
+      }
+    }
+    return out;
+  }
+
   const GameLogic = {
     MANA_PER_TURN,
     CRIT_CHANCE,
@@ -222,10 +347,18 @@
     newBattle,
     totalAtk,
     totalDef,
+    totalIntel,
     startPlayerTurn,
     playerAction,
     monsterTurn,
     endCombat,
+    applyStatReward,
+    applyEquipment,
+    applyReward,
+    rollReward,
+    healOnNewFloor,
+    healExploreSuccess,
+    healAltar,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = GameLogic;

@@ -156,3 +156,46 @@ test('战斗结束回满玩家法力', () => {
   GL.endCombat(b);
   assert.equal(b.player.mana, 100);
 });
+
+// ===== 任务 3：奖励 / 装备 / HP 经济纯函数 =====
+
+test('applyStatReward 属性成长：攻/防/HP上限/智力', () => {
+  const p = { atk:5, def:5, intel:8, hp:80, maxHp:100, mana:50, maxMana:100, equipment:{} };
+  GL.applyStatReward(p, { kind:'atk', amount:2 });
+  assert.equal(p.atk, 7);
+  GL.applyStatReward(p, { kind:'hpMax', amount:20 });
+  assert.equal(p.maxHp, 120);
+  assert.equal(p.hp, 120); // HP 上限奖励回满
+});
+
+test('applyEquipment 同槽取更高替换，否则丢弃', () => {
+  const p = { atk:5, def:5, intel:8, hp:100, maxHp:100, mana:100, maxMana:100, equipment:{} };
+  GL.applyEquipment(p, { slot:'weapon', name:'铁剑', atk:3 });
+  assert.equal(p.equipment.weapon.atk, 3);
+  GL.applyEquipment(p, { slot:'weapon', name:'木剑', atk:1 }); // 更低 → 丢弃，保留铁剑
+  assert.equal(p.equipment.weapon.name, '铁剑');
+  assert.equal(p.equipment.weapon.atk, 3);
+  GL.applyEquipment(p, { slot:'armor', name:'皮甲', def:2 });
+  assert.equal(p.equipment.armor.def, 2);
+});
+
+test('totalAtk 计入武器加成', () => {
+  const p = { atk:5, equipment:{ weapon:{ name:'铁剑', atk:3 } } };
+  assert.equal(GL.totalAtk(p), 8);
+});
+
+test('healOnNewFloor 回补上限 25%（不超过上限）', () => {
+  const p = { hp:10, maxHp:100, mana:0, maxMana:100 };
+  GL.healOnNewFloor(p);
+  assert.equal(p.hp, 35); // 10 + 25
+  p.hp = 95;
+  GL.healOnNewFloor(p);
+  assert.equal(p.hp, 100); // 封顶
+});
+
+test('healExploreSuccess 探索成功 +10~15，封顶上限', () => {
+  const p = { hp:95, maxHp:100 };
+  GL.healExploreSuccess(p);
+  assert.ok(p.hp >= 100 && p.hp <= 110); // 至少回满
+  assert.ok(p.hp <= 100); // 但封顶 100
+});
