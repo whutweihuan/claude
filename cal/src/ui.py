@@ -8,8 +8,12 @@ integration tests). `self.window` and `self.root` both refer to that window.
 import tkinter as tk
 from tkinter import ttk
 
+from src import calculator
+
 
 class CalculatorApp:
+    _OPS = {'+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide'}
+
     def __init__(self, root=None):
         self._owns_root = root is None
         self.root = root if root is not None else tk.Tk()
@@ -54,6 +58,33 @@ class CalculatorApp:
             self.entry.delete(0, 'end')
         else:
             self.entry.insert('end', label)
+
+    def calculate(self):
+        result = self._evaluate(self.entry.get())
+        self._set_entry(self._format(result))
+
+    def _set_entry(self, text):
+        self.entry.delete(0, 'end')
+        self.entry.insert(0, text)
+
+    def _format(self, value):
+        # Show whole numbers without a trailing ".0" (e.g. 5.0 -> "5").
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    def _evaluate(self, expr):
+        expr = expr.strip()
+        op_index = -1
+        op_char = None
+        for i, ch in enumerate(expr):
+            if ch in self._OPS and i > 0:
+                op_index, op_char = i, ch
+        if op_index == -1:
+            return float(expr)
+        a = float(expr[:op_index])
+        b = float(expr[op_index + 1:])
+        return getattr(calculator, self._OPS[op_char])(a, b)
 
     def toggle_theme(self):
         current = self.style.theme_use()
