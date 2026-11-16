@@ -5,6 +5,8 @@ no argument, as in the window tests) or a caller-supplied root (as in the
 integration tests). `self.window` and `self.root` both refer to that window.
 """
 
+import ast
+
 import tkinter as tk
 from tkinter import ttk
 
@@ -12,7 +14,15 @@ from src import calculator
 
 
 class CalculatorApp:
-    _OPS = {'+': 'add', '-': 'subtract', '*': 'multiply', '/': 'divide'}
+    # Maps AST binary-operator node types to calculator functions. Using the
+    # AST (not eval) keeps user input safe while supporting multiple operators
+    # with standard precedence (e.g. 1 + 6 * 9 = 55).
+    _AST_OPS = {
+        ast.Add: 'add',
+        ast.Sub: 'subtract',
+        ast.Mult: 'multiply',
+        ast.Div: 'divide',
+    }
 
     def __init__(self, root=None):
         self._owns_root = root is None
@@ -106,20 +116,43 @@ class CalculatorApp:
         return str(value)
 
     def _evaluate(self, expr):
+        # Parse the expression into an AST and evaluate it. This supports any
+        # number of operators with standard precedence (1 + 6 * 9 = 55) while
+        # staying safe: we only ever walk numbers and the four arithmetic
+        # operators, never executing arbitrary Python.
         expr = expr.strip()
-        op_positions = [i for i, ch in enumerate(expr) if ch in self._OPS and i > 0]
-        if len(op_positions) > 1:
-            # Basic calculator: one binary operation at a time. Anything with
-            # more than one operator is rejected with a clear message instead
-            # of a cryptic float() conversion error.
-            raise ValueError("Invalid expression: use one operator at a time")
-        if not op_positions:
-            return float(expr)
-        op_index = op_positions[0]
-        op_char = expr[op_index]
-        a = float(expr[:op_index])
-        b = float(expr[op_index + 1:])
-        return getattr(calculator, self._OPS[op_char])(a, b)
+        if not expr:
+            raise ValueError("Invalid expression: empty input")
+        try:
+            tree = ast.parse(expr, mode='eval')
+        except SyntaxError:
+            raise ValueError("Invalid expression: malformed input")
+        return self._eval_node(tree.body)
+
+    def _eval_node(self, node):
+        # A number literal. ast.Num is what 3.8 produces; ast.Constant covers
+        # newer builds. Reject non-numeric constants (e.g. names, strings).
+        if isinstance(node, (ast.Constant, ast.Num)):
+            value = node.value if isinstance(node, ast.Constant) else node.n
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("Invalid expression: unsupported literal")
+            return float(value)
+        if isinstance(node, ast.BinOp):
+            left = self._eval_node(node.left)
+            right = self._eval_node(node.right)
+            op_name = self._AST_OPS.get(type(node.op))
+            if op_name is None:
+                raise ValueError("Invalid expression: unsupported operator")
+            return getattr(calculator, op_name)(left, right)
+        if isinstance(node, ast.UnaryOp):
+            # Allow a leading sign, e.g. -5 or +3.
+            operand = self._eval_node(node.operand)
+            if isinstance(node.op, ast.USub):
+                return -operand
+            if isinstance(node.op, ast.UAdd):
+                return operand
+            raise ValueError("Invalid expression: unsupported unary operator")
+        raise ValueError("Invalid expression: unsupported input")
 
     def toggle_theme(self):
         current = self.style.theme_use()

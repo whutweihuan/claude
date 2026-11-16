@@ -8,9 +8,10 @@ def test_divide_by_zero(tk_root):
     assert app.entry.get() == "Error: Cannot divide by zero"
 
 
-def test_multi_operator_gives_clear_error(tk_root):
+def test_invalid_expression_gives_clear_error(tk_root):
+    # Non-numeric input must give a clear, stable error (not a raw float() crash).
     app = CalculatorApp(tk_root)
-    app.entry.insert(0, '2+3+4')
+    app.entry.insert(0, 'abc')
     app.calculate()
     text = app.entry.get()
     assert text.startswith('Error:')
