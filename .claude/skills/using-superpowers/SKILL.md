@@ -74,16 +74,14 @@ Gemini CLI 用户通过 GEMINI.md 自动获得 `references/gemini-tools.md` 的�
 > 🇨🇳 **本节是 superpowers-zh 的增量内容，上游 obra/superpowers 没有。**
 > 用于说明本 fork 原创的 chinese-* 系列 skill 何时使用。其余各节均为逐节翻译。
 
-这 4 个 chinese-* 是**参考资料，不是工作流** —— 话术模板、排版约定、平台配置差异。
+这 2 个 chinese-* 是**参考资料，不是工作流** —— 话术模板、排版约定、平台配置差异。
 它们**只在用户显式调用时才加载**，不要根据上下文自动触发：上下文里多一份排版参考
 不会让你写得更好，只会挤掉真正需要的内容。
 
 | 用户显式说 | 加载技能 | 里面是什么 |
 |------|---------|---------|
 | `/chinese-code-review` | **chinese-code-review** | 中文 review 话术模板、分级标注、国内团队常见反模式应对 |
-| `/chinese-git-workflow` | **chinese-git-workflow** | Gitee / Coding.net / 极狐 GitLab / CNB 的 SSH、凭据、CI 接入差异 |
 | `/chinese-documentation` | **chinese-documentation** | 中英文空格、全半角标点、术语保留、中文文案排版指北约定 |
-| `/chinese-commit-conventions` | **chinese-commit-conventions** | Conventional Commits 中文适配、commitlint / husky 中文模板 |
 
 用户没点名就不要主动拉进来。反过来，用户点名了就照它执行，不要因为"看起来只是格式问题"
 而跳过。
