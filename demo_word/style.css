@@ -1,0 +1,273 @@
+/* 地下城跑团 — 暗黑哥特主题（零外链：无外部字体 / 无外部图片） */
+
+:root {
+  --bg: #0d0a0f;        /* 深底 */
+  --warm: #d4a04a;      /* 火把暖光 */
+  --blood: #a12a2a;     /* 血红 */
+  --edge: #3a2f22;      /* 暗金边 */
+  --text: #cfc4b4;
+  --text-dim: #8a7f6f;
+  --mana: #3a5fa0;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  background:
+    radial-gradient(1100px 500px at 50% -120px, rgba(64, 40, 72, 0.35) 0%, rgba(13, 10, 15, 0) 70%) no-repeat,
+    var(--bg);
+  color: var(--text);
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  line-height: 1.65;
+  min-height: 100vh;
+}
+
+button, input { font-family: inherit; }
+
+#app { max-width: 1080px; margin: 0 auto; padding: 16px; }
+
+/* ---- 标题 / 开场 ---- */
+
+.title {
+  text-align: center;
+  font-size: 28px;
+  letter-spacing: 8px;
+  color: var(--warm);
+  text-shadow: 0 0 18px rgba(212, 160, 74, 0.35);
+  margin: 26px 0 8px;
+}
+
+.intro {
+  text-align: center;
+  color: var(--text-dim);
+  margin: 0 auto 22px;
+  max-width: 560px;
+}
+
+/* ---- 角色选择卡片 ---- */
+
+.char-cards { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
+
+.char-card {
+  flex: 1 1 280px;
+  max-width: 340px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #171019 0%, #100c12 100%);
+  padding: 18px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.char-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--warm);
+  box-shadow: 0 6px 24px rgba(212, 160, 74, 0.15), inset 0 0 24px rgba(161, 42, 42, 0.08);
+}
+
+.char-emoji { font-size: 40px; text-align: center; }
+
+.char-name { text-align: center; color: var(--warm); margin: 6px 0 12px; }
+
+.char-attrs { list-style: none; margin: 0 0 10px; padding: 0; }
+
+.char-attrs li {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px dashed #2a2318;
+  padding: 3px 0;
+  font-size: 14px;
+}
+
+.char-attrs li span:last-child { color: var(--warm); }
+
+.char-skills { font-size: 13px; color: var(--text-dim); }
+
+/* ---- 场景卡（CSS 渐变 + emoji，不加载外部图片）---- */
+
+.scene-card {
+  position: relative;
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  min-height: 150px;
+  padding: 22px 20px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.45);
+}
+
+.scene-emoji {
+  font-size: 42px;
+  letter-spacing: 10px;
+  text-shadow: 0 4px 18px rgba(0, 0, 0, 0.65);
+}
+
+.scene-desc {
+  margin-top: 10px;
+  color: #e8ddc8;
+  font-size: 14px;
+  max-width: 640px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.75);
+}
+
+.scene-monster { margin-top: 10px; color: var(--blood); font-size: 13px; letter-spacing: 1px; }
+
+/* ---- 楼层主区 ---- */
+
+.floor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: start;
+}
+
+.room {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #120d14;
+  margin-bottom: 12px;
+}
+
+.room-title { color: var(--warm); margin: 0 0 6px; font-size: 16px; }
+
+.room-desc { margin: 0 0 8px; font-size: 14px; }
+
+.room-monster { margin: 0; color: #d89b6a; font-size: 13px; }
+
+/* ---- 选项按钮 ---- */
+
+.options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+
+.opt-btn {
+  text-align: left;
+  background: #16101a;
+  color: var(--text);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.opt-btn:hover { border-color: var(--warm); background: #1d1522; }
+
+/* ---- 自由输入 ---- */
+
+.free-input { display: flex; gap: 8px; }
+
+.free-text {
+  flex: 1;
+  min-width: 0;
+  background: #0f0b12;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 14px;
+}
+
+.free-text::placeholder { color: #5d5446; }
+
+.free-btn {
+  background: #241a10;
+  color: var(--warm);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 9px 16px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.free-btn:hover { border-color: var(--warm); }
+
+/* ---- 角色面板 ---- */
+
+.panel {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #151017, #0f0b11);
+  padding: 14px;
+}
+
+.panel-title { margin: 0 0 10px; color: var(--warm); font-size: 15px; letter-spacing: 2px; }
+
+.bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+
+.bar-track {
+  height: 10px;
+  background: #0a080c;
+  border: 1px solid #241c14;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.bar-fill { height: 100%; transition: width 0.25s ease; }
+
+.bar-hp { background: linear-gradient(90deg, #7e1f1f, var(--blood)); }
+.bar-mana { background: linear-gradient(90deg, #27406e, var(--mana)); }
+
+.stats { display: flex; gap: 8px; margin-bottom: 10px; }
+
+.stat {
+  flex: 1;
+  border: 1px solid #241c14;
+  border-radius: 6px;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.stat-label { display: block; font-size: 12px; color: var(--text-dim); }
+.stat-val { color: var(--warm); font-size: 16px; }
+
+.equip { border-top: 1px solid #241c14; padding-top: 8px; }
+
+.equip-title { margin: 0 0 6px; font-size: 13px; color: var(--text-dim); }
+
+.equip-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 2px 0; }
+
+.equip-slot { color: var(--text-dim); flex-shrink: 0; }
+
+.floor-num { margin-top: 10px; text-align: center; color: var(--warm); font-size: 14px; letter-spacing: 1px; }
+
+/* ---- 战斗 / 事件日志滚动区 ---- */
+
+.logbox {
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: #0e0a10;
+  padding: 10px 12px;
+  height: 260px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.logbox::-webkit-scrollbar { width: 8px; }
+.logbox::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 4px; }
+
+.log-line { padding: 2px 0; color: var(--text-dim); border-bottom: 1px dotted #1e1712; }
+
+.log-line:last-child { color: var(--text); border-bottom: none; }
+
+/* ---- 移动端单列 ---- */
+
+@media (max-width: 600px) {
+  #app { padding: 10px; }
+
+  .floor-grid { grid-template-columns: 1fr; }
+
+  .char-cards { flex-direction: column; align-items: stretch; }
+  .char-card { max-width: none; }
+
+  .title { font-size: 22px; letter-spacing: 4px; }
+}
