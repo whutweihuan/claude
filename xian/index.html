@@ -477,6 +477,8 @@ ul{list-style:none}
 .toast .t-body span{font-size:11px;color:var(--ink-dim)}
 .toast.jade{border-color:rgba(127,214,176,.45)}
 .toast.jade .t-ico{color:var(--jade)} .toast.jade .t-body b{color:var(--jade)}
+.toast.danger{border-color:rgba(217,138,122,.55)}
+.toast.danger .t-ico{color:var(--danger)} .toast.danger .t-body b{color:var(--danger)}
 @keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
 @keyframes toastOut{to{opacity:0;transform:translateX(40px)}}
 
@@ -559,6 +561,17 @@ ul{list-style:none}
   #break-overlay .bo-realm{font-size:36px;letter-spacing:6px;text-indent:6px}
   #toasts{left:12px;right:12px;max-width:none;align-items:stretch}
 }
+.v2-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;padding:16px}.v2-card{padding:20px;border:1px solid var(--jade);border-radius:14px;background:rgba(30,60,50,.08);transition:transform .2s,box-shadow .2s}.v2-card:hover{transform:translateY(-3px);box-shadow:0 8px 24px #64aa8822}.v2-card p{line-height:1.8;font-size:13px}.v2-card button{padding:10px 14px;margin:5px;border:1px solid var(--jade);border-radius:8px;background:transparent;color:inherit;cursor:pointer}.v2-card button:disabled{opacity:.4;cursor:not-allowed}.v2-root{position:fixed;inset:0;z-index:1000;background:#101d21ed;overflow:auto;padding:5vh 5vw;color:#eee}.v2-root h2,.v2-root>p{text-align:center}.v2-root .v2-card{border-color:var(--root-color);animation:v2-awake .6s ease-out}.v2-root button{color:var(--root-color)}@keyframes v2-awake{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}nav{overflow-x:auto}.tab-btn{flex-shrink:0}@media(max-width:600px){.v2-grid{grid-template-columns:1fr;padding:10px}.v2-root{padding:20px 10px}}
+/* 大面积背景模糊在移动滚动时会反复合成；使用静态柔和云色。 */
+.cloud{filter:none;background:radial-gradient(ellipse,rgba(150,190,180,.65),transparent 70%)}
+.is-scrolling #bg *,.is-scrolling .aura,.is-scrolling #btn-break,.is-scrolling #progress-fill::after{animation-play-state:paused!important}
+.is-scrolling #app *{backdrop-filter:none!important}
+@media (hover:none),(prefers-reduced-motion:reduce){
+  *{backdrop-filter:none!important}
+  .cloud,#particles span{animation:none!important}
+  .v2-card:hover{transform:none;box-shadow:none}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
@@ -722,9 +735,9 @@ ul{list-style:none}
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4 L19 4 L19 20 L5 20 Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 9 L16 9 M8 13 L16 13 M8 17 L12 17" stroke="currentColor" stroke-width="1.3"/></svg>
           日志
         </button>
-      </nav>
+      <button class="tab-btn" data-tab="technique" type="button">功法</button><button class="tab-btn" data-tab="expedition" type="button">秘境</button><button class="tab-btn" data-tab="alchemy" type="button">丹房</button></nav>
 
-      <div id="tab-panes">
+      <div id="tab-panes"><div class="pane" id="pane-technique" role="tabpanel"><div id="v2-technique" class="v2-grid"></div></div><div class="pane" id="pane-expedition" role="tabpanel"><div id="v2-expedition" class="v2-grid"></div></div><div class="pane" id="pane-alchemy" role="tabpanel"><div id="v2-alchemy" class="v2-grid"></div></div>
         <!-- 洞府设施 -->
         <div class="pane active" id="pane-cave" role="tabpanel">
           <div id="bld-grid">
@@ -919,24 +932,26 @@ ul{list-style:none}
   </div>
   </div>
 </body>
-<script>
+<div id="v2-root" class="v2-root" style="display:none" role="dialog" aria-modal="true" aria-label="灵根觉醒"></div><script>
 'use strict';
 /* ================================================================
  * 云岫修仙录 —— 单文件放置修仙
- * 模块：GameConfig / GameState / NumberFormat / Rates / SaveSystem
- *      GameEngine / CultivationSystem / UpgradeSystem / QuestSystem
- *      AchievementSystem / Effects / UI / Game
+ * 模块：GameConfig / GameState / NumberFormat / ResourceSystem / BuffSystem
+ *      Rates / SaveSystem / GameEngine / CultivationSystem / UpgradeSystem
+ *      QuestSystem / AchievementSystem / Effects / UI / Game
  * 原则：所有数值先改 GameState，再触发 UI 渲染；收益统一由 Rates 计算。
  * ================================================================ */
 
 /* ---------------- 配置 ---------------- */
 const GameConfig = {
   SAVE_KEY: 'yunxiu_xiuxian_save_v1',
-  SAVE_VERSION: 1,
+  SAVE_VERSION: 2,
   OFFLINE_CAP_SEC: 8 * 3600,      // 离线收益上限 8 小时
   OFFLINE_MIN_SEC: 5,             // 少于 5 秒不结算离线收益
   AUTOSAVE_MS: 30 * 1000,
   TICK_MS: 100,
+  UI_REFRESH_MS: 300,
+  SCROLL_IDLE_MS: 180,
   LOG_MAX: 60,
   BASE: {
     cultPerSec: 1,        // 基础修为/秒
@@ -979,8 +994,76 @@ const GameConfig = {
     alchemy: { name: '炼丹房', baseCost: 40, growth: 1.18, perLevel: 0.1, type: 'breath' },
   },
 
+  /* ---- V2：五行灵根（一次性觉醒，五选一；pct 为加成百分比） ---- */
+  SPIRIT_ROOTS: {
+    metal: { name: '金灵根', affects: 'stone',     pct: 12, color: '#e8c47a', quality: '天赋', icon: '◆', direction: '资源发展', description: '金气凝财，聚四方灵石。' },
+    wood:  { name: '木灵根', affects: 'cult',      pct: 12, color: '#8fd98a', quality: '天赋', icon: '❀', direction: '自动修炼', description: '生机绵延，修为日积月累。' },
+    water: { name: '水灵根', affects: 'offline',   pct: 15, color: '#6cc4e8', quality: '天赋', icon: '≈', direction: '放置发展', description: '流水不息，归来收获更丰。' },
+    fire:  { name: '火灵根', affects: 'breath',    pct: 20, color: '#e88a5a', quality: '天赋', icon: '焰', direction: '主动修炼', description: '心火炽盛，吐纳更进一步。' },
+    earth: { name: '土灵根', affects: 'buildCost', pct: 10, color: '#c9a86a', quality: '天赋', icon: '山', direction: '洞府建设', description: '厚土载物，建设更加从容。' },
+  },
+  SPIRIT_ROOT_ORDER: ['metal', 'wood', 'water', 'fire', 'earth'],
+
+  /* ---- V2：功法（境界 + 残卷解锁；至多装备 1 个；等级 1..5） ---- */
+  TECHNIQUES: {
+    qingmu: { name: '青木长生诀', quality: '普通', affects: 'cult',   bonuses: [12, 16, 20, 24, 30], unlockStage: 2,  unlockFragments: 5 },
+    taihu:  { name: '太虚纳灵诀', quality: '优秀', affects: 'breath', bonuses: [25, 30, 35, 40, 45], unlockStage: 9,  unlockFragments: 15 },
+    thoutu: { name: '厚土聚宝诀', quality: '稀有', affects: 'stone',  bonuses: [12, 16, 20, 24, 30], unlockStage: 12, unlockFragments: 25 },
+  },
+  TECH_MAX_LEVEL: 5,
+  /* 等级 n → n+1 的升级成本（1→2 … 4→5 共 4 档） */
+  TECH_UPGRADE_COSTS: [
+    { stone: 300,  herbs: 6 },
+    { stone: 800,  herbs: 14, demonCores: 2 },
+    { stone: 2000, herbs: 24, demonCores: 5 },
+    { stone: 5000, herbs: 40, demonCores: 10 },
+  ],
+
+  /* ---- V2：秘境历练（奖励在开始时一次性生成并存档，领取不再重算） ---- */
+  EXPLORATION_ROUTES: {
+    balanced:{name:'稳步探索',time:1,material:1,stone:1,desc:'原有时长与奖励，均衡发展'},
+    gather:{name:'寻药采集',time:1.25,material:1.6,stone:0.7,desc:'耗时 +25%，材料 +60%，灵石 -30%'},
+    study:{name:'访古寻卷',time:1.5,material:1,stone:0.8,fragments:2,desc:'耗时 +50%，残卷翻倍，灵石 -20%'}
+  },
+  EXPLORATION_EVENTS: [
+    {name:'雾中药圃',desc:'山雾散开，一处古老药圃显露。采摘外围灵草，还是踏入阵法深处？',safe:{herbs:3},risk:{herbs:10,fragments:1}},
+    {name:'无名石碑',desc:'石碑记载着残缺功法。抄录表层文字，还是以神识探查碑心？',safe:{fragments:1},risk:{fragments:4,demonCores:1}},
+    {name:'山中灵兽',desc:'一只灵兽守着遗落的行囊。拾取散落物资，还是尝试接近它？',safe:{stone:30},risk:{stone:100,demonCores:2}}
+  ],
+  EXPLORATION_RISK_CHANCE:0.55,
+  EXPLORATION_PILL_CHANCE:0.15,
+  EXPEDITION_DURATIONS: { short: 60, mid: 300, long: 900 },
+  EXPEDITIONS: {
+    lingcaogu: { name: '灵草谷', unlockStage: 2, rewards: {
+      short: { herbs: 4, stone: 15 },
+      mid:   { herbs: 10, fragments: 1, stone: 40 },
+      long:  { herbs: 24, fragments: 2, stone: 100 },
+    } },
+    guxiu:     { name: '古修遗府', unlockStage: 9, rewards: {
+      short: { herbs: 3, fragments: 1, stone: 60 },
+      mid:   { herbs: 8, fragments: 2, stone: 140 },
+      long:  { herbs: 16, fragments: 4, stone: 320 },
+    } },
+    youshan:   { name: '妖兽山脉', unlockStage: 12, rewards: {
+      short: { herbs: 4, demonCores: 1, stone: 120 },
+      mid:   { herbs: 10, demonCores: 2, fragments: 1, stone: 280 },
+      long:  { herbs: 20, demonCores: 4, fragments: 2, stone: 600 },
+    } },
+  },
+  /* 历练奖励的境界缩放与抖动（以 startedAt 为固定种子，结果确定） */
+  EXPEDITION_REALM_SCALE: { perStage: 0.02, cap: 2.5, jitter: 0.1 },
+
+  /* ---- V2：炼丹（增益用 expiresAt 绝对时间戳；刷新不叠加） ---- */
+  PILLS: {
+    juqi:   { name: '聚气丹', quality: '普通', cost: { herbs: 3 },                    affects: 'cult',   bonusPct: 30, durationMs: 600000 },
+    nshen:  { name: '凝神丹', quality: '优秀', cost: { herbs: 2, demonCores: 1 },     affects: 'breath', bonusPct: 50, durationMs: 600000 },
+    naling: { name: '纳灵丹', quality: '稀有', cost: { herbs: 2, demonCores: 2 },     affects: 'stone',  bonusPct: 30, durationMs: 600000 },
+  },
+  PILL_ORDER: ['juqi', 'nshen', 'naling'],
+
   /* 任务：metric 为 QuestSystem.metric() 识别的指标名 */
   QUESTS: [
+    {id:'g9',cat:'growth',name:'机缘由心',desc:'解决 5 次秘境机缘',metric:'encountersResolved',target:5,reward:{stone:800,cult:1200}},
     { id: 'g1', cat: 'growth',   name: '初入仙途', desc: '完成 1 次静心吐纳',        metric: 'breathCount',   target: 1,     reward: { stone: 20 } },
     { id: 'g2', cat: 'growth',   name: '修为有成', desc: '累计获得 1 万修为',        metric: 'totalCult',     target: 1e4,   reward: { stone: 200, cult: 500 } },
     { id: 'g3', cat: 'growth',   name: '筑基之路', desc: '突破至筑基初期',          metric: 'stage',         target: 9,     reward: { stone: 1000, cult: 2000 } },
@@ -991,6 +1074,19 @@ const GameConfig = {
     { id: 'c1', cat: 'challenge',name: '金丹大道', desc: '突破至金丹初期',          metric: 'stage',         target: 12,    reward: { stone: 5000, cult: 1e4 } },
     { id: 'c2', cat: 'challenge',name: '灵脉贯通', desc: '灵脉达到 10 级',           metric: 'bldVein',       target: 10,    reward: { stone: 3000, cult: 5e4 } },
     { id: 'c3', cat: 'challenge',name: '灵石百万', desc: '累计获得 100 万灵石',      metric: 'totalStone',    target: 1e6,   reward: { stone: 2e4 } },
+    /* ---- V2：与灵根/功法/秘境/炼丹联动 ---- */
+    { id: 'g5', cat: 'growth',   name: '灵根觉醒', desc: '完成首次灵根觉醒',        metric: 'rootAwakened',        target: 1,     reward: { stone: 300 } },
+    { id: 'g6', cat: 'growth',   name: '功法初成', desc: '装备一本功法',            metric: 'techniqueEquipped',   target: 1,     reward: { stone: 400, cult: 800 } },
+    { id: 'g7', cat: 'growth',   name: '秘境初探', desc: '完成第一次秘境历练',      metric: 'expeditionCompleted', target: 1,     reward: { stone: 500, cult: 1000 } },
+    { id: 'g8', cat: 'growth',   name: '丹炉初热', desc: '成功炼制一枚丹药',        metric: 'pillsCrafted',        target: 1,     reward: { stone: 500 } },
+    { id: 'd4', cat: 'daily',    name: '两番历练', desc: '今日完成 2 次秘境历练',   metric: 'dailyExpedition',     target: 2,     reward: { stone: 200 } },
+    { id: 'd5', cat: 'daily',    name: '灵草入囊', desc: '今日获得 5 株灵草',       metric: 'dailyHerbs',          target: 5,     reward: { stone: 150, cult: 200 } },
+    { id: 'd6', cat: 'daily',    name: '炼丹一次', desc: '今日炼制 1 枚丹药',       metric: 'dailyCraft',          target: 1,     reward: { stone: 150 } },
+    { id: 'd7', cat: 'daily',    name: '服用丹药', desc: '今日服用 1 枚丹药',       metric: 'dailyPillUsed',       target: 1,     reward: { stone: 120 } },
+    { id: 'c4', cat: 'challenge',name: '功法大成', desc: '任一功法达到 5 级',       metric: 'techMaxLevel',        target: 5,     reward: { stone: 8000, cult: 2e4 } },
+    { id: 'c5', cat: 'challenge',name: '妖丹百枚', desc: '累计收集 100 枚妖丹',     metric: 'demonCoresTotal',     target: 100,   reward: { stone: 6000, cult: 15000 } },
+    { id: 'c6', cat: 'challenge',name: '秘境全开', desc: '解锁全部 3 处秘境',       metric: 'expeditionsUnlocked', target: 3,     reward: { stone: 20000, cult: 50000 } },
+    { id: 'c7', cat: 'challenge',name: '功法收藏', desc: '解锁全部功法',            metric: 'techniquesUnlocked',  target: 3,     reward: { stone: 30000, cult: 1e5 } },
   ],
   QUEST_CATS: [
     { key: 'growth',    label: '成长任务' },
@@ -1008,6 +1104,13 @@ const GameConfig = {
     { id: 'a6', name: '小有家产', desc: '累计获得 10 万灵石',   cond: 'stone100k', reward: { stone: 2000 } },
     { id: 'a7', name: '金丹大道', desc: '突破至金丹期',         cond: 'stage12',   reward: { stone: 2e4 } },
     { id: 'a8', name: '化神之境', desc: '突破至化神期',         cond: 'stage18',   reward: { stone: 2e5 } },
+    /* ---- V2：灵根/功法/秘境/炼丹成就 ---- */
+    { id: 'a9',  name: '五行初窥',   desc: '完成首次灵根觉醒',     cond: 'root1',      reward: { stone: 300, cult: 300 } },
+    { id: 'a10', name: '功法入门',   desc: '解锁第一本功法',       cond: 'tech1',      reward: { stone: 500 } },
+    { id: 'a11', name: '秘境探索者', desc: '完成第一次秘境历练',   cond: 'expedition1', reward: { stone: 400, cult: 400 } },
+    { id: 'a12', name: '丹道初成',   desc: '成功炼制第一枚丹药',   cond: 'pill1',      reward: { stone: 400 } },
+    { id: 'a13', name: '百炉丹师',   desc: '累计炼制 100 枚丹药',  cond: 'pill100',    reward: { stone: 1e5, cult: 5e4 } },
+    { id: 'a14', name: '洞天寻宝人', desc: '累计收集 100 枚妖丹',  cond: 'demon100',   reward: { stone: 80000 } },
   ],
 };
 
@@ -1018,18 +1121,34 @@ const GameState = {
     return {
       version: GameConfig.SAVE_VERSION,
       realm: { stage: 0, cult: 0 },                 // stage 当前境界序号；cult 当前阶段修为
-      resources: { stone: 0 },
+      resources: { stone: 0, herbs: 0, demonCores: 0, fragments: 0 },
       buildings: { array: 0, vein: 0, alchemy: 0 },
       stats: {
         totalCult: 0, totalStone: 0,
         breathCount: 0, upgradeCount: 0, breakthroughCount: 0, playTimeSec: 0,
+        herbsTotal: 0, demonCoresTotal: 0, fragmentsTotal: 0,
+        expeditionsCompleted: 0, pillsCrafted: 0, pillsUsed: 0,
       },
       quests: {
         claimed: {},                 // {questId: true}
         dailyDate: '',               // 本地日期 YYYY-MM-DD
-        daily: { breath: 0, cult: 0, upgrade: 0 },
+        daily: { breath: 0, cult: 0, upgrade: 0, expedition: 0, herbs: 0, craft: 0, pillUsed: 0 },
       },
       achievements: { unlocked: [] },
+      cultivation: {                /* V2：灵根 + 功法 */
+        rootId: null,               /* null = 尚未觉醒 */
+        equippedTechnique: null,
+        techniques: {},             /* {id: {unlocked: true, level: 1..5}} */
+      },
+      alchemy: {                   /* V2：丹药库存 + 生效增益 */
+        inventory: {},              /* {pillId: count} */
+        activeBuffs: {},            /* {affects: {pill, expiresAt}} */
+      },
+      expedition: {                /* V2：秘境历练（真实时间戳） */
+        active: null,               /* {id, durKey, startedAt, endsAt, rewards, claimed} */
+        completedCount: 0,
+      },
+      exploration:{route:'balanced',encounter:null,resolved:0},
       settings: { sound: true },
       pendingOffline: null,          // { seconds, cult, stone }
       log: [],                       // [{ t, msg, gold }]
@@ -1044,7 +1163,11 @@ const GameState = {
     s.realm.stage = Number.isFinite(r.stage) ? Math.max(0, Math.min(r.stage, GameConfig.REALMS.length - 1)) : 0;
     s.realm.cult = Number.isFinite(r.cult) && r.cult > 0 ? r.cult : 0;
     const res = raw.resources || {};
+    const resNum = (v) => (Number.isFinite(v) && v > 0) ? Math.floor(v) : 0;
     s.resources.stone = Number.isFinite(res.stone) && res.stone > 0 ? res.stone : 0;
+    s.resources.herbs = resNum(res.herbs);
+    s.resources.demonCores = resNum(res.demonCores);
+    s.resources.fragments = resNum(res.fragments);
     const b = raw.buildings || {};
     for (const k of Object.keys(s.buildings)) {
       s.buildings[k] = Number.isFinite(b[k]) && b[k] > 0 ? Math.floor(b[k]) : 0;
@@ -1058,16 +1181,79 @@ const GameState = {
     s.quests.claimed = (q.claimed && typeof q.claimed === 'object') ? q.claimed : {};
     s.quests.dailyDate = typeof q.dailyDate === 'string' ? q.dailyDate : '';
     const dq = q.daily || {};
+    const dnum = (v) => (Number.isFinite(v) && v > 0) ? Math.floor(v) : 0;
     s.quests.daily = {
-      breath: Number.isFinite(dq.breath) && dq.breath > 0 ? dq.breath : 0,
-      cult: Number.isFinite(dq.cult) && dq.cult > 0 ? dq.cult : 0,
-      upgrade: Number.isFinite(dq.upgrade) && dq.upgrade > 0 ? dq.upgrade : 0,
+      breath: dnum(dq.breath),
+      cult: dnum(dq.cult),
+      upgrade: dnum(dq.upgrade),
+      expedition: dnum(dq.expedition),
+      herbs: dnum(dq.herbs),
+      craft: dnum(dq.craft),
+      pillUsed: dnum(dq.pillUsed),
     };
     const a = raw.achievements || {};
     s.achievements.unlocked = Array.isArray(a.unlocked)
       ? a.unlocked.filter(x => typeof x === 'string').slice(0, 64) : [];
     const set = raw.settings || {};
     s.settings.sound = set.sound !== false;
+    /* ---- V2 字段合并（缺失/脏值一律回退安全默认） ---- */
+    const cv = raw.cultivation || {};
+    s.cultivation.rootId = (typeof cv.rootId === 'string' && GameConfig.SPIRIT_ROOTS[cv.rootId]) ? cv.rootId : null;
+    const techs = (cv.techniques && typeof cv.techniques === 'object') ? cv.techniques : {};
+    const cleanTechs = {};
+    for (const id of Object.keys(GameConfig.TECHNIQUES)) {
+      const t = techs[id];
+      if (t && t.unlocked === true) {
+        const lv = Number.isFinite(t.level) ? Math.max(1, Math.min(GameConfig.TECH_MAX_LEVEL, Math.floor(t.level))) : 1;
+        cleanTechs[id] = { unlocked: true, level: lv };
+      }
+    }
+    s.cultivation.techniques = cleanTechs;
+    s.cultivation.equippedTechnique = (cv.equippedTechnique && cleanTechs[cv.equippedTechnique]) ? cv.equippedTechnique : null;
+    const al = raw.alchemy || {};
+    const inv = (al.inventory && typeof al.inventory === 'object') ? al.inventory : {};
+    const cleanInv = {};
+    for (const id of Object.keys(GameConfig.PILLS)) {
+      if (Number.isFinite(inv[id]) && inv[id] > 0) cleanInv[id] = Math.floor(inv[id]);
+    }
+    s.alchemy.inventory = cleanInv;
+    const buffs = (al.activeBuffs && typeof al.activeBuffs === 'object') ? al.activeBuffs : {};
+    const cleanBuffs = {};
+    for (const key of Object.keys(buffs)) {
+      const bf = buffs[key];
+      if (bf && GameConfig.PILLS[bf.pill] && Number.isFinite(bf.expiresAt) && bf.expiresAt > Date.now()) {
+        cleanBuffs[key] = { pill: bf.pill, expiresAt: bf.expiresAt };
+      }
+    }
+    s.alchemy.activeBuffs = cleanBuffs;
+    const exploration=raw.exploration||{};
+    s.exploration.route=Object.hasOwn(GameConfig.EXPLORATION_ROUTES,exploration.route)?exploration.route:'balanced';
+    s.exploration.resolved=dnum(exploration.resolved);
+    const encounter=exploration.encounter;
+    if(encounter && Number.isInteger(encounter.event) && GameConfig.EXPLORATION_EVENTS[encounter.event] && Number.isFinite(encounter.roll) && encounter.roll>=0 && encounter.roll<1)
+      s.exploration.encounter={event:encounter.event,roll:encounter.roll};
+    const ex = raw.expedition || {};
+    s.expedition.completedCount = Number.isFinite(ex.completedCount) && ex.completedCount > 0 ? Math.floor(ex.completedCount) : 0;
+    const act = ex.active;
+    if (act && GameConfig.EXPEDITIONS[act.id]
+        && Number.isFinite(act.startedAt) && Number.isFinite(act.endsAt) && act.endsAt > act.startedAt
+        && act.claimed !== true
+        && act.rewards && typeof act.rewards === 'object' && Object.keys(act.rewards).length > 0) {
+      const cleanRewards = {};
+      for (const rk of ['herbs', 'demonCores', 'fragments', 'stone']) {
+        if (Number.isFinite(act.rewards[rk]) && act.rewards[rk] > 0) cleanRewards[rk] = Math.floor(act.rewards[rk]);
+      }
+      if (Object.keys(cleanRewards).length > 0) {
+        s.expedition.active = {
+          id: act.id,
+          durKey: (act.durKey && GameConfig.EXPEDITION_DURATIONS[act.durKey]) ? act.durKey : 'mid',
+          startedAt: act.startedAt,
+          endsAt: act.endsAt,
+          rewards: cleanRewards,
+          claimed: false,
+        };
+      }
+    }
     if (raw.pendingOffline) {
       const p = raw.pendingOffline;
       if (Number.isFinite(p.seconds) && p.seconds > 0 &&
@@ -1129,26 +1315,68 @@ const Rates = {
   realmMult() {
     return 1 + GameState.state.realm.stage * GameConfig.REALM_MULT_PER_STAGE;
   },
-  cultPerSec() {
+  /* V2 灵根倍率：affects 匹配才生效；未觉醒/不匹配 → 1 */
+  rootMult(affects) {
     const s = GameState.state;
-    return (GameConfig.BASE.cultPerSec + s.buildings.array * GameConfig.BUILDINGS.array.perLevel) * this.realmMult();
+    const rootId = s.cultivation ? s.cultivation.rootId : null;
+    const r = rootId && GameConfig.SPIRIT_ROOTS && GameConfig.SPIRIT_ROOTS[rootId];
+    if (!r || r.affects !== affects) return 1;
+    return 1 + r.pct / 100;
   },
-  stonePerSec() {
+  /* V2 灵根建筑成本倍率（土 −10%）；未觉醒/不匹配 → 1 */
+  rootCostMult() {
     const s = GameState.state;
-    return (GameConfig.BASE.stonePerSec + s.buildings.vein * GameConfig.BUILDINGS.vein.perLevel) * this.realmMult();
+    const rootId = s.cultivation ? s.cultivation.rootId : null;
+    const r = rootId && GameConfig.SPIRIT_ROOTS && GameConfig.SPIRIT_ROOTS[rootId];
+    if (!r || r.affects !== 'buildCost') return 1;
+    return 1 - r.pct / 100;
   },
-  breathCult() {
+  /* V2 功法倍率：已装备功法 affects 匹配时按等级取加成；未装备/不匹配 → 1 */
+  techMult(affects) {
     const s = GameState.state;
-    return GameConfig.BASE.breathCult * (1 + s.buildings.alchemy * GameConfig.BUILDINGS.alchemy.perLevel) * this.realmMult();
+    const id = s.cultivation ? s.cultivation.equippedTechnique : null;
+    const t = id && GameConfig.TECHNIQUES ? GameConfig.TECHNIQUES[id] : null;
+    const rec = id && s.cultivation && s.cultivation.techniques ? s.cultivation.techniques[id] : null;
+    if (!t || !rec || rec.unlocked !== true || t.affects !== affects) return 1;
+    const lv = Math.max(1, Math.min(GameConfig.TECH_MAX_LEVEL, rec.level));
+    const pct = t.bonuses[lv - 1];
+    if (!Number.isFinite(pct)) return 1;
+    return 1 + pct / 100;
   },
-  breathStone() {
+  /* V2 丹药增益倍率：无生效增益 → 1；now 缺省用真实时钟（测试可显式传入） */
+  buffMult(affects, now) {
+    return BuffSystem.getMultiplier(affects, now);
+  },
+  integrate(channel, start, end) {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+    const cuts=[start,end];
+    for(const b of Object.values(GameState.state.alchemy.activeBuffs))
+      if(b.expiresAt>start && b.expiresAt<end)cuts.push(b.expiresAt);
+    cuts.sort((a,b)=>a-b);
+    let total=0;
+    for(let i=1;i<cuts.length;i++)total+=this[channel](cuts[i-1])*(cuts[i]-cuts[i-1])/1000;
+    return total;
+  },
+  cultPerSec(now) {
     const s = GameState.state;
-    return GameConfig.BASE.breathStone * (1 + s.buildings.alchemy * GameConfig.BUILDINGS.alchemy.perLevel) * this.realmMult();
+    return (GameConfig.BASE.cultPerSec + s.buildings.array * GameConfig.BUILDINGS.array.perLevel) * this.realmMult() * this.rootMult('cult') * this.techMult('cult') * this.buffMult('cult', now);
+  },
+  stonePerSec(now) {
+    const s = GameState.state;
+    return (GameConfig.BASE.stonePerSec + s.buildings.vein * GameConfig.BUILDINGS.vein.perLevel) * this.realmMult() * this.rootMult('stone') * this.techMult('stone') * this.buffMult('stone', now);
+  },
+  breathCult(now) {
+    const s = GameState.state;
+    return GameConfig.BASE.breathCult * (1 + s.buildings.alchemy * GameConfig.BUILDINGS.alchemy.perLevel) * this.realmMult() * this.rootMult('breath') * this.techMult('breath') * this.buffMult('breath', now);
+  },
+  breathStone(now) {
+    const s = GameState.state;
+    return GameConfig.BASE.breathStone * (1 + s.buildings.alchemy * GameConfig.BUILDINGS.alchemy.perLevel) * this.realmMult() * this.rootMult('breath') * this.techMult('breath') * this.buffMult('breath', now);
   },
   buildingCost(id) {
     const cfg = GameConfig.BUILDINGS[id];
     const lv = GameState.state.buildings[id];
-    return Math.ceil(cfg.baseCost * Math.pow(cfg.growth, lv));
+    return Math.ceil(cfg.baseCost * Math.pow(cfg.growth, lv) * this.rootCostMult());
   },
 };
 
@@ -1178,6 +1406,304 @@ function addLog(msg, gold) {
   if (s.log.length > GameConfig.LOG_MAX) s.log.splice(0, s.log.length - GameConfig.LOG_MAX);
 }
 
+/* ---------------- V2：资源系统（灵草 / 妖丹 / 功法残卷） ---------------- */
+const ResourceSystem = {
+  TYPES: { herbs: '灵草', demonCores: '妖丹', fragments: '功法残卷' },
+  TOTAL_KEYS: { herbs: 'herbsTotal', demonCores: 'demonCoresTotal', fragments: 'fragmentsTotal' },
+  /* 增加：拒绝 NaN / 负数 / Infinity / 未知类型 */
+  add(type, n) {
+    const s = GameState.state;
+    if (!this.TYPES[type]) return false;
+    if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return false;
+    const v = Math.floor(n);
+    s.resources[type] += v;
+    s.stats[this.TOTAL_KEYS[type]] += v;
+    if (type === 'herbs' && s.quests && s.quests.daily) s.quests.daily.herbs += v;
+    return true;
+  },
+  /* 能否负担全部成本 */
+  canAfford(cost) {
+    if (!cost || typeof cost !== 'object') return false;
+    const s = GameState.state;
+    for (const k of Object.keys(cost)) {
+      const need = cost[k];
+      if (!Number.isFinite(need) || need < 0) return false;
+      if ((s.resources[k] || 0) < need) return false;
+    }
+    return true;
+  },
+  /* 单资源扣除 */
+  spend(type, n) {
+    const s = GameState.state;
+    if (!Number.isFinite(n) || n < 0 || (s.resources[type] || 0) < n) return false;
+    s.resources[type] -= n;
+    return true;
+  },
+  /* 混合成本：全有或全无（原子） */
+  spendCosts(cost) {
+    if (!this.canAfford(cost)) return false;
+    for (const k of Object.keys(cost)) {
+      GameState.state.resources[k] -= cost[k];
+    }
+    return true;
+  },
+  /* UI 成本文案：「灵草×3 妖丹×1」 */
+  costText(cost) {
+    if (!cost || typeof cost !== 'object') return '';
+    const parts = [];
+    for (const k of Object.keys(cost)) {
+      const name = this.TYPES[k] || (k === 'stone' ? '灵石' : k);
+      parts.push(name + '×' + cost[k]);
+    }
+    return parts.join(' ');
+  },
+};
+
+/* ---------------- V2：丹药增益系统（绝对时间戳；刷新不叠加） ---------------- */
+const BuffSystem = {
+  /* 消耗 1 颗丹药启用增益；expiresAt = now + duration */
+  apply(pillId, now) {
+    if (typeof now !== 'number' || !Number.isFinite(now)) now = Date.now();
+    const s = GameState.state;
+    const pill = GameConfig.PILLS[pillId];
+    if (!pill) return false;
+    if ((s.alchemy.inventory[pillId] || 0) <= 0) return false;
+    s.alchemy.inventory[pillId]--;
+    s.alchemy.activeBuffs[pill.affects] = { pill: pillId, expiresAt: now + pill.durationMs };
+    s.stats.pillsUsed += 1;
+    return true;
+  },
+  /* 返回当前类型增益倍率（无/过期 → 1） */
+  getMultiplier(affects, now) {
+    if (typeof now !== 'number' || !Number.isFinite(now)) now = Date.now();
+    const s = GameState.state;
+    const bf = s.alchemy.activeBuffs[affects];
+    if (bf && GameConfig.PILLS[bf.pill] && bf.expiresAt > now) {
+      return 1 + GameConfig.PILLS[bf.pill].bonusPct / 100;
+    }
+    return 1;
+  },
+  /* 清理过期增益（引擎 tick / 启动时调用） */
+  update(now) {
+    if (typeof now !== 'number' || !Number.isFinite(now)) now = Date.now();
+    const s = GameState.state;
+    for (const k of Object.keys(s.alchemy.activeBuffs)) {
+      if (s.alchemy.activeBuffs[k].expiresAt <= now) delete s.alchemy.activeBuffs[k];
+    }
+  },
+};
+
+/* ---------------- V2：炼丹系统（炼制入库存；服用落增益） ---------------- */
+const AlchemySystem = {
+  /* 炼制：成本原子扣除，成功入库存并计数；失败/不足一律不改状态 */
+  craft(pillId) {
+    const pill = GameConfig.PILLS[pillId];
+    if (!pill) return false;
+    const s = GameState.state;
+    if (!ResourceSystem.canAfford(pill.cost)) return false;
+    if (!ResourceSystem.spendCosts(pill.cost)) return false;
+    s.alchemy.inventory[pillId] = (s.alchemy.inventory[pillId] || 0) + 1;
+    s.stats.pillsCrafted += 1;
+    if (s.quests && s.quests.daily) s.quests.daily.craft += 1;
+    return true;
+  },
+  /* 服用：扣库存 + 落增益 + stats.pillsUsed 由 BuffSystem.apply 负责；
+     本函数只补记 quests.daily.pillUsed，避免重复计数 */
+  use(pillId, now) {
+    const ok = BuffSystem.apply(pillId, now);
+    if (!ok) return false;
+    const s = GameState.state;
+    if (s.quests && s.quests.daily) s.quests.daily.pillUsed += 1;
+    return true;
+  },
+};
+
+/* ---------------- V2：五行灵根（首次觉醒，一次性选择） ---------------- */
+const RootSystem = {
+  /* 首次觉醒：合法灵根且尚未觉醒才可选；选后不可改 */
+  select(rootId) {
+    const cfg = GameConfig.SPIRIT_ROOTS;
+    if (!cfg || !cfg[rootId]) return false;
+    const s = GameState.state;
+    if (!s.cultivation || s.cultivation.rootId !== null) return false;
+    s.cultivation.rootId = rootId;
+    addLog('灵根觉醒：' + cfg[rootId].name, true);
+    QuestSystem.checkUnlockable();
+    AchievementSystem.checkAll();
+    if (typeof Effects !== 'undefined') Effects.sound('achv');
+    SaveSystem.save();
+    UI.renderAll();
+    return true;
+  },
+};
+
+/* ---------------- V2：功法（解锁 / 装备 / 升级 ≤5，至多装备一门） ---------------- */
+const TechniqueSystem = {
+  /* 解锁：境界 + 残卷门槛；成功即 level=1 并自动装备 */
+  unlock(id) {
+    const t = GameConfig.TECHNIQUES[id];
+    if (!t) return false;
+    const s = GameState.state;
+    const rec = s.cultivation ? s.cultivation.techniques[id] : null;
+    if (rec && rec.unlocked) return false;
+    if (s.realm.stage < t.unlockStage) return false;
+    if ((s.resources.fragments || 0) < t.unlockFragments) return false;
+    s.resources.fragments -= t.unlockFragments;
+    s.cultivation.techniques[id] = { unlocked: true, level: 1 };
+    s.cultivation.equippedTechnique = id;
+    addLog('功法解锁：' + t.name, true);
+    QuestSystem.checkUnlockable();
+    AchievementSystem.checkAll();
+    if (typeof Effects !== 'undefined') Effects.sound('achv');
+    SaveSystem.save();
+    UI.renderAll();
+    return true;
+  },
+  /* 装备：已解锁功法自由切换，不消耗资源 */
+  equip(id) {
+    const t = GameConfig.TECHNIQUES[id];
+    if (!t) return false;
+    const s = GameState.state;
+    const rec = s.cultivation ? s.cultivation.techniques[id] : null;
+    if (!rec || rec.unlocked !== true) return false;
+    s.cultivation.equippedTechnique = id;
+    addLog('装备功法：' + t.name);
+    QuestSystem.checkUnlockable();
+    AchievementSystem.checkAll();
+    if (typeof Effects !== 'undefined') Effects.sound('buy');
+    SaveSystem.save();
+    UI.renderAll();
+    return true;
+  },
+  /* 升级：level n → n+1，成本 = TECH_UPGRADE_COSTS[n-1]，多资源原子扣除；满级返回 null */
+  upgrade(id) {
+    const t = GameConfig.TECHNIQUES[id];
+    if (!t) return null;
+    const s = GameState.state;
+    const rec = s.cultivation ? s.cultivation.techniques[id] : null;
+    if (!rec || rec.unlocked !== true) return null;
+    if (rec.level >= GameConfig.TECH_MAX_LEVEL) return null;
+    const cost = GameConfig.TECH_UPGRADE_COSTS[rec.level - 1];
+    if (!cost) return null;
+    if (!ResourceSystem.spendCosts(cost)) return null;
+    rec.level += 1;
+    addLog(t.name + ' 升至 Lv' + rec.level, true);
+    QuestSystem.checkUnlockable();
+    AchievementSystem.checkAll();
+    if (typeof Effects !== 'undefined') Effects.sound('buy');
+    SaveSystem.save();
+    UI.renderAll();
+    return { level: rec.level, cost };
+  },
+};
+
+/* ---------------- V2：秘境历练（真实时间戳；一次一个；奖励开始即快照保存） ---------------- */
+const ExpeditionSystem = {
+  setRoute(id){
+    const s=GameState.state;
+    if(!Object.hasOwn(GameConfig.EXPLORATION_ROUTES,id)||s.expedition.active)return false;
+    s.exploration.route=id;SaveSystem.save();return true;
+  },
+  resolveEncounter(choice){
+    const s=GameState.state,e=s.exploration.encounter;
+    if(!e || !['safe','risk'].includes(choice))return false;
+    const event=GameConfig.EXPLORATION_EVENTS[e.event];
+    const bonus=s.alchemy.activeBuffs.cult;
+    const chance=GameConfig.EXPLORATION_RISK_CHANCE+(bonus && bonus.expiresAt>Date.now()?GameConfig.EXPLORATION_PILL_CHANCE:0);
+    const win=choice==='safe'||e.roll<chance,rewards=win?event[choice]:{};
+    s.exploration.encounter=null;s.exploration.resolved++;
+    for(const [k,v]of Object.entries(rewards)){if(k==='stone')addStone(v);else ResourceSystem.add(k,v);}
+    addLog(event.name+'：'+(win?'机缘有获，'+ResourceSystem.costText(rewards):'探查未果，平安归来；原历练奖励不受影响'),true);
+    QuestSystem.checkUnlockable();AchievementSystem.checkAll();SaveSystem.save();UI.renderAll();
+    return {win,rewards};
+  },
+  _rewards(id, durKey, stage, startedAt) {
+    const cfg = GameConfig;
+    const base = cfg.EXPEDITIONS[id].rewards[durKey];
+    const sc = cfg.EXPEDITION_REALM_SCALE;
+    const mult = Math.min(sc.cap, 1 + sc.perStage * stage);
+    let h = 2166136261;
+    const str = id + ':' + durKey;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    h ^= (startedAt >>> 0);
+    h = Math.imul(h, 16777619);
+    let s32 = (h | 0) || 0x9e3779b9;
+    const out = {};
+    for (const k of Object.keys(base)) {
+      s32 ^= s32 << 13; s32 ^= s32 >>> 17; s32 ^= s32 << 5; s32 |= 0;
+      const r = (s32 >>> 0) / 4294967296;
+      const jitter = 1 + (r * 2 - 1) * sc.jitter;
+      out[k] = Math.max(1, Math.round(base[k] * mult * jitter));
+    }
+    return out;
+  },
+  start(id, durKey, nowMs) {
+    if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) nowMs = Date.now();
+    const cfg = GameConfig;
+    const exp = cfg.EXPEDITIONS[id];
+    if (!exp) return false;
+    const dur = cfg.EXPEDITION_DURATIONS[durKey];
+    if (!dur) return false;
+    const s = GameState.state;
+    if (s.realm.stage < exp.unlockStage) return false;
+    if (s.expedition.active || s.exploration.encounter) return false;
+    s.expedition.active = {
+      id, durKey,
+      startedAt: nowMs,
+      endsAt: nowMs + dur * 1000,
+      rewards: this._rewards(id, durKey, s.realm.stage, nowMs),
+      claimed: false,
+    };
+    const route=cfg.EXPLORATION_ROUTES[s.exploration.route];
+    const a=s.expedition.active;
+    a.endsAt=nowMs+dur*1000*route.time;
+    for(const k of Object.keys(a.rewards))a.rewards[k]=Math.max(1,Math.floor(a.rewards[k]*(k==='stone'?route.stone:k==='fragments'?(route.fragments||route.material):route.material)));
+    addLog('进入秘境：' + exp.name+' · '+route.name, true);
+    QuestSystem.checkUnlockable();
+    AchievementSystem.checkAll();
+    if (typeof Effects !== 'undefined') Effects.sound('buy');
+    SaveSystem.save();
+    UI.renderAll();
+    return true;
+  },
+  claim(nowMs) {
+    if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) nowMs = Date.now();
+    const s = GameState.state;
+    const a = s.expedition.active;
+    if (!a || nowMs < a.endsAt) return null;
+    const exp = GameConfig.EXPEDITIONS[a.id];
+    for (const k of Object.keys(a.rewards)) {
+      const v = a.rewards[k];
+      if (k === 'stone') { s.resources.stone += v; s.stats.totalStone += v; }
+      else ResourceSystem.add(k, v);
+    }
+    s.expedition.completedCount += 1;
+    s.stats.expeditionsCompleted += 1;
+    if (s.quests && s.quests.daily) s.quests.daily.expedition += 1;
+    if(s.exploration.route!=='balanced'){
+      const seed=(Math.imul(a.startedAt|0,1664525)+1013904223)>>>0;
+      s.exploration.encounter={event:seed%GameConfig.EXPLORATION_EVENTS.length,roll:((Math.imul(seed,1664525)+1013904223)>>>0)/4294967296};
+    }
+    s.expedition.active = null;
+    addLog('领取秘境奖励：' + (exp ? exp.name : a.id), true);
+    QuestSystem.checkUnlockable();
+    AchievementSystem.checkAll();
+    if (typeof Effects !== 'undefined') Effects.sound('achv');
+    SaveSystem.save();
+    UI.renderAll();
+    return { id: a.id, rewards: a.rewards };
+  },
+  progress(nowMs) {
+    if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) nowMs = Date.now();
+    const a = GameState.state.expedition.active;
+    if (!a) return null;
+    const total = a.endsAt - a.startedAt;
+    if (total <= 0) return { done: true, remainingSec: 0, fraction: 1 };
+    const fraction = Math.max(0, Math.min(1, (nowMs - a.startedAt) / total));
+    return { done: nowMs >= a.endsAt, remainingSec: Math.max(0, Math.ceil((a.endsAt - nowMs) / 1000)), fraction };
+  },
+};
+
 /* ---------------- 存档与离线收益 ---------------- */
 const SaveSystem = {
   load() {
@@ -1189,12 +1715,22 @@ const SaveSystem = {
     GameState.state = GameState.mergeSaved(raw);
     return GameState.state;
   },
+  _saveFailed: false,
   save() {
     const s = GameState.state;
     s.lastSaved = Date.now();
     try {
       localStorage.setItem(GameConfig.SAVE_KEY, JSON.stringify(s));
-    } catch (e) { /* 存储不可用时静默失败，游戏继续 */ }
+      this._saveFailed = false;
+      return true;
+    } catch (e) {
+      /* 存储不可用时只提示一次，避免 toast 刷屏 */
+      if (!this._saveFailed) {
+        this._saveFailed = true;
+        if (typeof Effects !== 'undefined') Effects.toast('存档失败：存储空间不可用，进度可能丢失', 'danger');
+      }
+      return false;
+    }
   },
   clear() {
     try { localStorage.removeItem(GameConfig.SAVE_KEY); } catch (e) {}
@@ -1211,16 +1747,19 @@ const SaveSystem = {
     }
     if (!Number.isFinite(gap) || gap < 0) gap = 0;
     gap = Math.min(gap, GameConfig.OFFLINE_CAP_SEC);
-    let seconds = (s.pendingOffline ? s.pendingOffline.seconds : 0) + gap;
+    const pending = s.pendingOffline;
+    let seconds = (pending ? pending.seconds : 0) + gap;
     seconds = Math.min(seconds, GameConfig.OFFLINE_CAP_SEC);
     if (seconds < GameConfig.OFFLINE_MIN_SEC) {
       s.pendingOffline = null;
       return null;
     }
+    /* V2 水灵根：+15% 仅作用于离线通道（不叠加进在线速率，避免 1.15² 双计） */
+    const offMult = Rates.rootMult('offline');
     s.pendingOffline = {
       seconds: seconds,
-      cult: Rates.cultPerSec() * seconds,
-      stone: Rates.stonePerSec() * seconds,
+      cult: (pending ? pending.cult : 0) + Rates.integrate('cultPerSec', now*1000-Math.max(0,seconds-(pending?pending.seconds:0))*1000, now*1000)*offMult,
+      stone: (pending ? pending.stone : 0) + Rates.integrate('stonePerSec', now*1000-Math.max(0,seconds-(pending?pending.seconds:0))*1000, now*1000)*offMult,
     };
     return s.pendingOffline;
   },
@@ -1251,17 +1790,22 @@ const GameEngine = {
   timer: null,
   autosaveTimer: null,
   lastTick: 0,
+  hiddenAt: 0,
   running: false,
   start() {
     if (this.running) return;
     this.running = true;
     this.lastTick = Date.now();
+    if (document.hidden) this.hiddenAt = this.lastTick;
     this.timer = setInterval(() => this.tick(), GameConfig.TICK_MS);
     this.autosaveTimer = setInterval(() => {
       SaveSystem.save();
-      UI.renderAll();
+      UI.renderPassive();
     }, GameConfig.AUTOSAVE_MS);
     window.addEventListener('beforeunload', () => SaveSystem.save());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && !this.hiddenAt) this.hiddenAt = Date.now();
+    });
   },
   stop() {
     this.running = false;
@@ -1270,23 +1814,38 @@ const GameEngine = {
   },
   tick() {
     const now = Date.now();
+    /* 页面隐藏期间不按帧结算（浏览器对后台定时器降频，逐帧 dt 不可靠），
+       只记录隐藏起点，等页面重新可见时按真实经过时间一次性补算 */
+    if (document.hidden) {
+      if (!this.hiddenAt) this.hiddenAt = now;
+      return;
+    }
     let dt = (now - this.lastTick) / 1000;
     this.lastTick = now;
     if (!Number.isFinite(dt) || dt <= 0) dt = 0;
-    if (dt > 5) dt = 5;   // 单帧最大 5 秒，防止后台恢复时跳变
+    const wasHidden = this.hiddenAt !== 0;
+    this.hiddenAt = 0;
+    /* 后台缺口与离线收益同规则：上限 8 小时 */
+    if (dt > GameConfig.OFFLINE_CAP_SEC) dt = GameConfig.OFFLINE_CAP_SEC;
+    if (wasHidden && dt >= 60) {
+      addLog('归山收益：补算 ' + NumberFormat.time(dt) + ' 的修炼', true);
+      Effects.toast('归山收益 ' + NumberFormat.time(dt) + ' 已入账', 'jade');
+    }
     this.advance(dt);
   },
   /* 核心推进：dt 秒内的自动产出（离线结算与测试都复用此逻辑） */
   advance(seconds) {
     if (!Number.isFinite(seconds) || seconds <= 0) return;
     const s = GameState.state;
-    addCult(Rates.cultPerSec() * seconds);
-    addStone(Rates.stonePerSec() * seconds);
+    const end=Date.now(),start=end-seconds*1000;
+    addCult(Rates.integrate('cultPerSec',start,end));
+    addStone(Rates.integrate('stonePerSec',start,end));
+    BuffSystem.update(end);
     s.stats.playTimeSec += seconds;
     QuestSystem.refreshDaily();
     QuestSystem.checkUnlockable();
     AchievementSystem.checkAll();
-    if (typeof UI !== 'undefined') UI.renderAll();
+    if (typeof UI !== 'undefined') UI.renderPassive();
   },
 };
 
@@ -1392,7 +1951,7 @@ const QuestSystem = {
     const key = this.todayKey();
     if (s.quests.dailyDate !== key) {
       s.quests.dailyDate = key;
-      s.quests.daily = { breath: 0, cult: 0, upgrade: 0 };
+      s.quests.daily = { breath: 0, cult: 0, upgrade: 0, expedition: 0, herbs: 0, craft: 0, pillUsed: 0 };
       for (const q of GameConfig.QUESTS) {
         if (q.cat === 'daily') delete s.quests.claimed[q.id];
       }
@@ -1411,6 +1970,43 @@ const QuestSystem = {
       case 'dailyBreath':  return s.quests.daily.breath;
       case 'dailyCult':    return s.quests.daily.cult;
       case 'dailyUpgrade': return s.quests.daily.upgrade;
+      /* ---- V2 联动指标 ---- */
+      case 'rootAwakened':        return (s.cultivation && s.cultivation.rootId) ? 1 : 0;
+      case 'techniqueEquipped':   return (s.cultivation && s.cultivation.equippedTechnique) ? 1 : 0;
+      case 'encountersResolved': return s.exploration.resolved;
+      case 'expeditionCompleted': return s.stats.expeditionsCompleted;
+      case 'pillsCrafted':        return s.stats.pillsCrafted;
+      case 'dailyExpedition':     return s.quests.daily.expedition;
+      case 'dailyHerbs':          return s.quests.daily.herbs;
+      case 'dailyCraft':          return s.quests.daily.craft;
+      case 'dailyPillUsed':       return s.quests.daily.pillUsed;
+      case 'techMaxLevel': {
+        let m = 0;
+        if (s.cultivation && s.cultivation.techniques) {
+          Object.keys(s.cultivation.techniques).forEach(id => {
+            const r = s.cultivation.techniques[id];
+            if (r && r.unlocked && r.level > m) m = r.level;
+          });
+        }
+        return m;
+      }
+      case 'demonCoresTotal':     return s.stats.demonCoresTotal;
+      case 'expeditionsUnlocked': {
+        const E = GameConfig.EXPEDITIONS;
+        let n = 0;
+        Object.keys(E).forEach(id => { if (s.realm.stage >= E[id].unlockStage) n++; });
+        return n;
+      }
+      case 'techniquesUnlocked':  {
+        const T = GameConfig.TECHNIQUES;
+        if (!s.cultivation || !s.cultivation.techniques) return 0;
+        let n = 0;
+        Object.keys(T).forEach(id => {
+          const r = s.cultivation.techniques[id];
+          if (r && r.unlocked) n++;
+        });
+        return n;
+      }
     }
     return 0;
   },
@@ -1461,6 +2057,13 @@ const AchievementSystem = {
     stone100k: s => s.stats.totalStone >= 1e5,
     stage12:   s => s.realm.stage >= 12,
     stage18:   s => s.realm.stage >= 18,
+    /* ---- V2：灵根/功法/秘境/炼丹 ---- */
+    root1:       s => !!(s.cultivation && s.cultivation.rootId),
+    tech1:       s => !!(s.cultivation && Object.keys(s.cultivation.techniques || {}).some(id => s.cultivation.techniques[id] && s.cultivation.techniques[id].unlocked)),
+    expedition1: s => s.stats.expeditionsCompleted >= 1,
+    pill1:       s => s.stats.pillsCrafted >= 1,
+    pill100:     s => s.stats.pillsCrafted >= 100,
+    demon100:    s => s.stats.demonCoresTotal >= 100,
   },
   isUnlocked(id) { return GameState.state.achievements.unlocked.indexOf(id) !== -1; },
   /* 自动解锁并立即发放奖励 */
@@ -1560,7 +2163,7 @@ const Effects = {
     const box = document.getElementById('toasts');
     if (!box) return;
     const el = document.createElement('div');
-    el.className = 'toast ' + (kind === 'jade' ? 'jade' : '');
+    el.className = 'toast ' + (kind === 'jade' ? 'jade' : kind === 'danger' ? 'danger' : '');
     const ico = document.createElement('span');
     ico.className = 't-ico';
     ico.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M12 2 L21 9 L12 22 L3 9 Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 9 L21 9" stroke="currentColor" stroke-width="1.2"/></svg>';
@@ -1633,6 +2236,14 @@ const UI = {
     ];
     for (const id of ids) this.el[id] = document.getElementById(id);
   },
+  /* 自动刷新与逻辑计时独立，滚动期间保留 DOM，停下后下次 tick 补绘。 */
+  _lastPassiveRender: 0,
+  _scrollUntil: 0,
+  renderPassive(now = Date.now()) {
+    if(now < this._scrollUntil || now-this._lastPassiveRender < GameConfig.UI_REFRESH_MS)return;
+    this._lastPassiveRender=now;
+    this.renderAll();
+  },
   /* ---------- 渲染 ---------- */
   renderAll() {
     this.renderTopbar();
@@ -1643,6 +2254,35 @@ const UI = {
     this.renderAchv();
     this.renderLog();
     this.renderOffline();
+    this.renderV2();
+  },
+
+  renderRootConfirmation() {
+    const r=GameConfig.SPIRIT_ROOTS[this.pendingRoot],el=document.getElementById('v2-root');
+    if(!r || !el)return;
+    const markup='<h2>确认觉醒 · '+r.name+'</h2><p>确认后无法更换，原有进度完整保留。</p><div class="v2-grid"><article class="v2-card"><h3>'+r.direction+'</h3><p>'+r.description+'</p><button type="button" data-v2="root-confirm">确认觉醒</button><button type="button" data-v2="root-cancel">返回选择</button></article></div>';
+    if(el._v2Markup!==markup){el.innerHTML=markup;el._v2Markup=markup;}
+  },
+  renderV2() {
+    const s=GameState.state, cfg=GameConfig;
+    const label={cult:'自动修为',stone:'灵石产出',breath:'吐纳收益',offline:'离线收益',buildCost:'建筑成本降低'};
+    const button=(text,action,id,disabled=false)=>'<button type="button" data-v2="'+action+'" data-id="'+id+'" '+(disabled?'disabled':'')+'>'+text+'</button>';
+    const card=(title,body)=>'<article class="v2-card"><h3>'+title+'</h3>'+body+'</article>';
+    const draw=(id,html)=>{const el=document.getElementById(id);if(el && el._v2Markup!==html){el.innerHTML=html;el._v2Markup=html;}};
+    const bag='<p>灵草 '+s.resources.herbs+' · 妖丹 '+s.resources.demonCores+' · 残卷 '+s.resources.fragments+'</p>';
+    draw('v2-technique',card('五行仙途', '<p>灵根：'+(s.cultivation.rootId?cfg.SPIRIT_ROOTS[s.cultivation.rootId].name:'待觉醒')+'</p>'+bag)+Object.entries(cfg.TECHNIQUES).map(([id,t])=>{
+      const rec=s.cultivation.techniques[id],lv=rec?rec.level:0,equipped=s.cultivation.equippedTechnique===id;
+      const cost=lv&&lv<cfg.TECH_MAX_LEVEL?cfg.TECH_UPGRADE_COSTS[lv-1]:null;
+      return card(t.name+' · '+t.quality,'<p>'+label[t.affects]+' +'+t.bonuses[Math.max(0,lv-1)]+'% · 等级 '+lv+'/'+cfg.TECH_MAX_LEVEL+'</p><p>持续修行，精研此诀以提升收益。</p>'+(!rec?'<p>需要 '+cfg.REALMS[t.unlockStage].name+' / 残卷 '+t.unlockFragments+'</p>'+button('解锁并装备','unlock',id,s.realm.stage<t.unlockStage||s.resources.fragments<t.unlockFragments):button(equipped?'已装备':'装备','equip',id,equipped)+(cost?'<p>'+ResourceSystem.costText(cost)+'</p>'+button('升级','upgrade',id,!ResourceSystem.canAfford(cost)):'<p>功法已圆满</p>')));
+    }).join(''));
+    const active=s.expedition.active,progress=ExpeditionSystem.progress();
+    const e=s.exploration.encounter,event=e&&cfg.EXPLORATION_EVENTS[e.event];
+    const choices=card('历练策略',Object.entries(cfg.EXPLORATION_ROUTES).map(([id,r])=>'<p>'+r.name+' · '+r.desc+'</p>'+button(s.exploration.route===id?'已选择':'选择','route',id,!!active||s.exploration.route===id)).join('')+'<p>特殊路线归来后触发机缘，稳步探索保持原玩法。已解决机缘 '+s.exploration.resolved+' 次。</p>')+(event?card(event.name,'<p>'+event.desc+'</p><p>稳妥收取：'+ResourceSystem.costText(event.safe)+'</p><p>冒险探查：'+ResourceSystem.costText(event.risk)+'；成功率 '+Math.round((cfg.EXPLORATION_RISK_CHANCE+(BuffSystem.getMultiplier('cult')>1?cfg.EXPLORATION_PILL_CHANCE:0))*100)+'%。失败不扣原奖励；聚气丹生效期间提高成功率。</p>'+button('稳妥收取','encounter','safe')+button('冒险探查','encounter','risk')):'');
+    draw('v2-expedition',choices+card('行囊与历练',bag+(active?'<p>'+cfg.EXPEDITIONS[active.id].name+' · 剩余 '+progress.remainingSec+' 秒</p><progress max="1" value="'+progress.fraction+'"></progress>'+button('领取奖励','claim','',!progress.done):'<p>当前没有历练。选择秘境和时长，归来后领取材料。</p>'))+Object.entries(cfg.EXPEDITIONS).map(([id,x])=>card(x.name,'<p>需要 '+cfg.REALMS[x.unlockStage].name+'</p>'+Object.entries(cfg.EXPEDITION_DURATIONS).map(([d,sec])=>'<p>'+ResourceSystem.costText(x.rewards[d])+button(sec/60+' 分钟','start',id+':'+d,!!active||!!e||s.realm.stage<x.unlockStage)+'</p>').join(''))).join(''));
+    draw('v2-alchemy',card('丹炉与药囊',bag+'<p>同类丹药刷新持续时间，不叠加倍率。</p>')+cfg.PILL_ORDER.map(id=>{const p=cfg.PILLS[id],buff=s.alchemy.activeBuffs[p.affects];return card(p.name+' · '+p.quality,'<p>'+label[p.affects]+' +'+p.bonusPct+'% / '+p.durationMs/60000+' 分钟</p><p>'+ResourceSystem.costText(p.cost)+'</p><p>库存 '+(s.alchemy.inventory[id]||0)+(buff?' · 增益剩余 '+Math.max(0,Math.ceil((buff.expiresAt-Date.now())/1000))+' 秒':'')+'</p>'+button('炼制','craft',id,!ResourceSystem.canAfford(p.cost))+button('服用','use',id,!(s.alchemy.inventory[id]>0)));}).join(''));
+    const root=document.getElementById('v2-root');
+    if(root && this.pendingRoot && !s.cultivation.rootId){this.renderRootConfirmation();return;}
+    if(root){root.style.display=s.cultivation.rootId?'none':'block';if(!s.cultivation.rootId)draw('v2-root','<h2>五行初醒 · 叩问仙途</h2><p>觉醒不会影响已有进度。灵根确认后不可更换。</p><div class="v2-grid">'+cfg.SPIRIT_ROOT_ORDER.map((id,i)=>{const r=cfg.SPIRIT_ROOTS[id];return '<div style="--root-color:'+r.color+'">'+card(r.icon+' '+r.name,'<p>'+r.quality+'灵根 · '+label[r.affects]+' +'+r.pct+'%</p><p>推荐：'+['资源发展','自动修炼','放置发展','主动修炼','洞府建设'][i]+'</p>'+button('选择并觉醒','root',id))+'</div>';}).join('')+'</div>');}
   },
   renderTopbar() {
     const s = GameState.state;
@@ -1720,25 +2360,36 @@ const UI = {
       box.innerHTML = '';
       this.questRefs = {};
       for (const cat of GameConfig.QUEST_CATS) {
-        const head = document.createElement('div');
-        head.className = 'q-cat';
-        head.textContent = cat.label;
-        box.appendChild(head);
+        const group = document.createElement('div');
+        group.className = 'quest-group';
+        const gt = document.createElement('div');
+        gt.className = 'qg-title';
+        gt.textContent = cat.label;
+        group.appendChild(gt);
         for (const q of GameConfig.QUESTS.filter(x => x.cat === cat.key)) {
           const card = document.createElement('div');
           card.className = 'quest-card';
           card.dataset.qid = q.id;
-          const title = document.createElement('div');
-          title.className = 'q-head';
-          const nm = document.createElement('b'); nm.textContent = q.name;
-          const st = document.createElement('span'); st.className = 'q-state';
-          title.appendChild(nm); title.appendChild(st);
-          const desc = document.createElement('div'); desc.className = 'q-desc'; desc.textContent = q.desc;
-          const bar = document.createElement('div'); bar.className = 'q-bar';
-          const fill = document.createElement('div'); fill.className = 'q-bar-fill';
+          const main = document.createElement('div');
+          main.className = 'q-main';
+          const top = document.createElement('div');
+          top.className = 'q-top';
+          const nm = document.createElement('span'); nm.className = 'q-name'; nm.textContent = q.name;
+          const desc = document.createElement('span'); desc.className = 'q-desc'; desc.textContent = q.desc;
+          top.appendChild(nm); top.appendChild(desc);
+          const prog = document.createElement('div');
+          prog.className = 'q-prog';
+          const bar = document.createElement('div');
+          bar.className = 'q-bar';
+          const fill = document.createElement('i');
+          fill.style.width = '0%';
           bar.appendChild(fill);
-          const foot = document.createElement('div'); foot.className = 'q-foot';
-          const rw = document.createElement('span'); rw.className = 'q-reward';
+          const num = document.createElement('span');
+          num.className = 'q-num';
+          prog.appendChild(bar); prog.appendChild(num);
+          main.appendChild(top); main.appendChild(prog);
+          const rw = document.createElement('span');
+          rw.className = 'q-reward';
           const parts = [];
           if (q.reward.cult) parts.push(NumberFormat.fmt(q.reward.cult) + ' 修为');
           if (q.reward.stone) parts.push(NumberFormat.fmt(q.reward.stone) + ' 灵石');
@@ -1747,11 +2398,11 @@ const UI = {
           btn.type = 'button'; btn.className = 'q-btn wait';
           btn.textContent = '未完成';
           btn.addEventListener('click', (function(id){ return function(){ QuestSystem.claim(id); }; })(q.id));
-          foot.appendChild(rw); foot.appendChild(btn);
-          card.appendChild(title); card.appendChild(desc); card.appendChild(bar); card.appendChild(foot);
-          box.appendChild(card);
-          this.questRefs[q.id] = { card: card, st: st, fill: fill, btn: btn };
+          card.appendChild(main); card.appendChild(rw); card.appendChild(btn);
+          group.appendChild(card);
+          this.questRefs[q.id] = { card: card, fill: fill, num: num, btn: btn };
         }
+        box.appendChild(group);
       }
     }
     for (const q of GameConfig.QUESTS) {
@@ -1761,9 +2412,9 @@ const UI = {
       const cur = QuestSystem.metric(q.metric);
       const pct = Math.min(100, (cur / q.target) * 100);
       r.fill.style.width = pct.toFixed(1) + '%';
+      r.num.textContent = NumberFormat.fmt(Math.min(cur, q.target)) + ' / ' + NumberFormat.fmt(q.target);
       r.card.classList.toggle('done', state === 'done');
       r.card.classList.toggle('claimed-card', state === 'claimed');
-      r.st.textContent = state === 'claimed' ? '已领取' : state === 'done' ? '可领取' : NumberFormat.fmt(Math.min(cur, q.target)) + ' / ' + NumberFormat.fmt(q.target);
       r.btn.className = 'q-btn ' + (state === 'claimed' ? 'claimed' : state === 'done' ? 'can' : 'wait');
       r.btn.textContent = state === 'claimed' ? '已领取' : state === 'done' ? '领 取' : '未完成';
       r.btn.disabled = state !== 'done';
@@ -1841,13 +2492,40 @@ const UI = {
   switchTab(key) {
     const btns = document.querySelectorAll('.tab-btn');
     for (const b of btns) b.classList.toggle('active', b.dataset.tab === key);
-    const panes = ['cave','quest','achv','log'];
+    const panes = ['cave','quest','achv','log','technique','expedition','alchemy'];
     for (const p of panes) {
       const el = document.getElementById('pane-' + p);
       if (el) el.classList.toggle('active', p === key);
     }
   },
   bind() {
+    let scrolling=false;
+    const markScrolling=()=>{
+      this._scrollUntil=Date.now()+GameConfig.SCROLL_IDLE_MS;
+      if(!scrolling){scrolling=true;document.documentElement && document.documentElement.classList.add('is-scrolling');}
+    };
+    document.addEventListener('scroll',markScrolling,{passive:true,capture:true});
+    const renderPassive=this.renderPassive.bind(this);
+    this.renderPassive=(now=Date.now())=>{
+      if(scrolling && now>=this._scrollUntil){scrolling=false;document.documentElement && document.documentElement.classList.remove('is-scrolling');}
+      renderPassive(now);
+    };
+    document.addEventListener('click', ev => {
+      const b=ev.target.closest && ev.target.closest('[data-v2]'); if(!b || b.disabled)return;
+      const a=b.dataset.v2,id=b.dataset.id; let result;
+      if(a==='root'){this.pendingRoot=id;this.renderRootConfirmation();return;}
+      else if(a==='root-cancel'){this.pendingRoot=null;this.renderV2();return;}
+      else if(a==='root-confirm'){if(!this.pendingRoot)return;result=RootSystem.select(this.pendingRoot);this.pendingRoot=null;}
+      else if(a==='start'){const parts=id.split(':');result=ExpeditionSystem.start(parts[0],parts[1]);}
+      else if(a==='route')result=ExpeditionSystem.setRoute(id);
+      else if(a==='encounter')result=ExpeditionSystem.resolveEncounter(id);
+      else if(a==='claim')result=ExpeditionSystem.claim();
+      else if(a==='craft'||a==='use')result=AlchemySystem[a](id);
+      else result=TechniqueSystem[a](id);
+      if(result===false||result===null)Effects.toast('条件不足，请检查境界、材料或库存','danger');
+      else {QuestSystem.checkUnlockable();AchievementSystem.checkAll();SaveSystem.save();Effects.toast('仙途进展已保存','jade');}
+      this.renderAll();
+    });
     const e = this.el;
     const on = (id, fn) => { e[id] && e[id].addEventListener('click', fn); };
 
@@ -1922,6 +2600,12 @@ const UI = {
       Effects.toast('存档已保存', 'jade');
     });
 
+    /* 日志页「重置」入口：复用设置页的二次确认流程 */
+    on('btn-reset', () => {
+      e['reset-confirm'].classList.remove('hidden');
+      e['modal-settings'].classList.add('show');
+    });
+
     e['break-overlay'].addEventListener('click', () => Effects.dismissBreakOverlay());
   },
 };
@@ -1932,6 +2616,7 @@ const Game = {
     SaveSystem.load();
     QuestSystem.refreshDaily();
     SaveSystem.computeOffline(Date.now() / 1000);
+    BuffSystem.update();
     UI.init();
     UI.bind();
     UI.renderAll();

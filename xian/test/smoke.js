@@ -1,102 +1,13 @@
 /* 云岫修仙录 冒烟回归测试
  * 用法：node test/smoke.js
- * 方式：vm.runInNewContext 执行 index.html 内嵌 <script>，
+ * 方式：vm 执行 index.html 内嵌 <script>（共享 test/harness.js），
  *       以 document/localStorage/window 桩模拟真实启动路径（Game.init 立即执行），
  *       然后直接驱动各系统断言核心循环。
  */
 'use strict';
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
+const { createSandbox } = require('./harness.js');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-const m = html.match(/<script>([\s\S]*?)<\/script>/);
-if (!m) { console.error('FAIL: 未找到 <script> 块'); process.exit(1); }
-
-/* ---------- DOM 桩 ---------- */
-function makeEl(id) {
-  const el = {
-    id: String(id),
-    textContent: '',
-    title: '',
-    innerHTML: '',
-    disabled: false,
-    checked: false,
-    offsetWidth: 0,
-    dataset: {},
-    style: { setProperty() {} },
-    children: [],
-    parentNode: null,
-    listeners: {},
-  };
-  el.classList = {
-    _s: new Set(),
-    add(c) { this._s.add(c); },
-    remove(c) { this._s.delete(c); },
-    contains(c) { return this._s.has(c); },
-    toggle(c, force) {
-      if (force === undefined) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); }
-      else if (force) this._s.add(c);
-      else this._s.delete(c);
-      return this._s.has(c);
-    },
-  };
-  el.addEventListener = (t, f) => { (el.listeners[t] = el.listeners[t] || []).push(f); };
-  el.setAttribute = () => {};
-  el.getAttribute = () => null;
-  el.appendChild = (ch) => { el.children.push(ch); ch.parentNode = el; return ch; };
-  el.remove = () => {
-    if (el.parentNode && el.parentNode.children) {
-      const i = el.parentNode.children.indexOf(el);
-      if (i >= 0) el.parentNode.children.splice(i, 1);
-    }
-  };
-  Object.defineProperty(el, 'firstChild', { get() { return el.children[0] || null; } });
-  return el;
-}
-
-const elements = {};
-const tabs = ['cave', 'quest', 'achv', 'log'].map(k => {
-  const t = makeEl('tab-' + k);
-  t.dataset.tab = k;
-  return t;
-});
-
-const documentStub = {
-  readyState: 'complete',
-  getElementById(id) { return elements[id] || (elements[id] = makeEl(id)); },
-  createElement(tag) { return makeEl(tag); },
-  createDocumentFragment() { return makeEl('fragment'); },
-  querySelectorAll(sel) { return sel === '.tab-btn' ? tabs : []; },
-  addEventListener() {},
-};
-
-const store = {};
-const localStorageStub = {
-  getItem(k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
-  setItem(k, v) { store[k] = String(v); },
-  removeItem(k) { delete store[k]; },
-};
-
-const windowStub = { addEventListener() {} };
-
-const sandbox = {
-  document: documentStub,
-  localStorage: localStorageStub,
-  window: windowStub,
-  setTimeout, clearTimeout, setInterval, clearInterval,
-  Date, Math, Number, JSON, console,
-  __exports: null,
-};
-
-const bridge = '\n;__exports = { GameConfig, GameState, NumberFormat, Rates, SaveSystem, GameEngine, ' +
-  'CultivationSystem, UpgradeSystem, QuestSystem, AchievementSystem, Effects, UI, Game, ' +
-  'addCult, addStone, spendStone, addLog };';
-
-vm.createContext(sandbox);
-vm.runInContext(m[1] + bridge, sandbox, { filename: 'xian-inline.js' });
-
-const G = sandbox.__exports;
+const { G, store, elements, documentStub } = createSandbox();
 if (!G) { console.error('FAIL: 桥接导出失败'); process.exit(1); }
 
 /* Game.init 已随启动路径执行（readyState=complete 时立即调用）。
@@ -235,6 +146,77 @@ ok('重置：境界归零', G.GameState.state.realm.stage === 0);
 ok('重置：资源归零', G.GameState.state.resources.stone === 0);
 ok('重置：成就清空', G.GameState.state.achievements.unlocked.length === 0);
 ok('重置：存档已清除', store[G.GameConfig.SAVE_KEY] === undefined, String(store[G.GameConfig.SAVE_KEY] === undefined));
+
+/* ---------- 13. P0 回归：重置入口 / 任务 DOM / 后台补算 ---------- */
+/* 13.1 日志页重置按钮：绑定存在，且复用设置页二次确认流程 */
+const elReset = elements['btn-reset'];
+ok('P0 重置：btn-reset 已绑定 click 监听', Array.isArray(elReset.listeners.click) && elReset.listeners.click.length >= 1);
+elements['modal-settings'].classList.remove('show');
+elements['reset-confirm'].classList.add('hidden');
+elReset.listeners.click.forEach(f => f());
+ok('P0 重置：点击后弹出设置弹窗', elements['modal-settings'].classList.contains('show'));
+ok('P0 重置：点击后展示重置二次确认', !elements['reset-confirm'].classList.contains('hidden'));
+
+/* 13.2 任务列表 DOM 结构与既有 CSS 设计对齐 */
+const ql = elements['quest-list'];
+const groups = ql.children.filter(c => c.classList.contains('quest-group'));
+ok('P0 任务：三个分类组 .quest-group', groups.length === 3, groups.length);
+const cards = groups.reduce((a, g) => a.concat(g.children.filter(c => c.classList.contains('quest-card'))), []);
+ok('P0 任务：任务卡齐全（= 配置任务数 10）', cards.length === G.GameConfig.QUESTS.length, cards.length);
+let struct = groups.length > 0 && groups.every(g => g.children[0].classList.contains('qg-title'));
+for (const c of cards) {
+  const main = c.children.find(x => x.classList.contains('q-main'));
+  if (!main || !main.children.some(x => x.classList.contains('q-top')) || !main.children.some(x => x.classList.contains('q-prog'))) { struct = false; break; }
+  if (!c.children.some(x => x.classList.contains('q-reward')) || !c.children.some(x => x.classList.contains('q-btn'))) { struct = false; break; }
+}
+ok('P0 任务：卡片 = .q-main(.q-top+.q-prog) + .q-reward + .q-btn', struct);
+const stray = [];
+(function walk(n) {
+  n.children.forEach(c => {
+    if (typeof c.className === 'string' && /q-cat|q-head|q-state|q-bar-fill|q-foot/.test(c.className)) stray.push(c.className);
+    walk(c);
+  });
+})(ql);
+ok('P0 任务：无遗留旧类名（q-cat/q-head/q-state/q-bar-fill/q-foot）', stray.length === 0, stray.join(','));
+
+/* 13.3 后台隐藏：不按帧结算，记录隐藏起点 */
+const eng = G.GameEngine;
+const st = G.GameState.state;
+documentStub.hidden = true;
+eng.hiddenAt = 0;
+eng.lastTick = Date.now();
+const cb0 = st.realm.cult, ps0 = st.resources.stone;
+eng.tick();
+ok('P0 后台：隐藏期间 tick 不结算', st.realm.cult === cb0 && st.resources.stone === ps0);
+ok('P0 后台：隐藏时记录了隐藏起点', eng.hiddenAt > 0);
+
+/* 13.4 恢复前台：5 分钟缺口按真实时长全额补算 */
+documentStub.hidden = false;
+const tA = Date.now();
+eng.lastTick = tA - 5 * 60 * 1000;
+eng.hiddenAt = tA - 5 * 60 * 1000;
+const rateC = G.Rates.cultPerSec(), rateS = G.Rates.stonePerSec();
+const cb1 = st.realm.cult, ps1 = st.resources.stone;
+eng.tick();
+ok('P0 后台：5 分钟缺口全额补算（≈300s 修为）', Math.abs((st.realm.cult - cb1) - 300 * rateC) < 2 * rateC, st.realm.cult - cb1);
+ok('P0 后台：5 分钟缺口灵石同步补算', Math.abs((st.resources.stone - ps1) - 300 * rateS) < 2 * rateS, st.resources.stone - ps1);
+ok('P0 后台：补算后 hiddenAt 已清零', eng.hiddenAt === 0);
+
+/* 13.5 超过 8 小时按离线上限封顶 */
+const tB = Date.now();
+eng.lastTick = tB - 10 * 3600 * 1000;
+eng.hiddenAt = tB - 10 * 3600 * 1000;
+const cb2 = st.realm.cult;
+eng.tick();
+ok('P0 后台：缺口超 8h 按 8h 封顶', Math.abs((st.realm.cult - cb2) - 8 * 3600 * rateC) < 2 * rateC, st.realm.cult - cb2);
+ok('P0 后台：封顶补算后 hiddenAt 已清零', eng.hiddenAt === 0);
+
+/* 13.6 正常节奏不受影响 */
+eng.lastTick = Date.now() - 100;
+const cb3 = st.realm.cult;
+eng.tick();
+ok('P0 后台：正常 0.1s tick 不受影响', Math.abs((st.realm.cult - cb3) - 0.1 * rateC) < rateC, st.realm.cult - cb3);
+documentStub.hidden = false;
 
 /* ---------- 汇总 ---------- */
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

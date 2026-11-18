@@ -1,0 +1,10 @@
+﻿const assert=require('assert');const {createSandbox}=require('./harness');
+const ctx=createSandbox();const {G,elements}=ctx;G.GameEngine.stop();
+const original=elements['v2-root'];let writes=0;
+elements['v2-root']=new Proxy(original,{get(target,key){if(key==='innerHTML')return 'browser normalized markup';return target[key];},set(target,key,value){if(key==='innerHTML')writes++;target[key]=value;return true;}});
+G.UI.renderV2();G.UI.renderV2();assert.equal(writes,0,'unchanged dialog must not be recreated every tick');
+G.UI.pendingRoot='wood';G.UI.renderV2();assert.equal(writes,1);
+G.UI.renderV2();assert.equal(writes,1,'confirmation remains stable');
+assert(elements['v2-root']._v2Markup.includes('root-confirm'));
+G.UI.pendingRoot=null;G.UI.renderV2();assert.equal(writes,2);
+console.log('stable dialog / confirmation / cancel passed');

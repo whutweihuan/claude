@@ -1,0 +1,15 @@
+﻿'use strict';
+const assert=require('assert');const {createSandbox}=require('./harness');
+const {G}=createSandbox();G.GameEngine.stop();
+let renders=0;const original=G.UI.renderAll;G.UI.renderAll=()=>renders++;
+assert.equal(typeof G.UI.renderPassive,'function');
+G.UI._lastPassiveRender=1000;G.UI._scrollUntil=2000;
+G.UI.renderPassive(1500);assert.equal(renders,0,'scrolling defers automatic DOM work');
+G.UI.renderPassive(2100);assert.equal(renders,1,'render catches up after scroll');
+G.UI.renderPassive(2101);assert.equal(renders,1,'throttle repeated tick renders');
+G.UI.renderAll();assert.equal(renders,2,'explicit actions remain immediate');
+G.UI.renderAll=original;
+const s=G.GameState.state;const before=s.stats.totalCult;
+G.UI._scrollUntil=Date.now()+10000;G.GameEngine.advance(1);
+assert(s.stats.totalCult>before,'production continues during scroll');
+console.log('scroll rendering / catch-up / production passed');

@@ -1,0 +1,16 @@
+﻿const assert=require('assert');
+const {createSandbox}=require('./harness');
+const {G,document}=createSandbox();
+G.GameEngine.stop();
+G.UI.renderV2();
+assert.strictEqual(typeof G.UI.renderV2,'function');
+const s=G.GameState.state;
+s.realm.stage=12;s.resources.herbs=100;s.resources.demonCores=20;s.resources.fragments=100;s.resources.stone=10000;
+assert(G.RootSystem.select('wood'));
+assert(G.TechniqueSystem.unlock('qingmu'));
+assert(G.TechniqueSystem.upgrade('qingmu'));
+assert(G.ExpeditionSystem.start('lingcaogu','short',Date.now()-61000));
+G.UI.renderV2();assert(G.ExpeditionSystem.claim());
+assert(G.AlchemySystem.craft('juqi'));assert(G.AlchemySystem.use('juqi'));
+G.UI.renderV2();G.UI.switchTab('alchemy');
+console.log('UI integration flow passed');
